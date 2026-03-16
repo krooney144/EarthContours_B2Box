@@ -13,6 +13,7 @@
  */
 
 import React, { useCallback, useRef, useEffect } from 'react'
+import { io, Socket } from 'socket.io-client'
 import { useMapViewStore } from '../../store'
 import { useLocationStore } from '../../store'
 import { createLogger } from '../../core/logger'
@@ -142,10 +143,38 @@ const ControlStrip: React.FC<ControlStripProps> = ({ side }) => {
     }, INITIAL_DELAY_MS)
   }, [stopHold])
 
+  // ── SELECT BUTTON ──────────────────────────────────────────────────────
+  // When pressed, selects the current map center location and broadcasts
+  // it to the Wrap screen via WebSocket so the terrain updates there too.
+
+  // Keep a socket ref for broadcasting location updates
+  const socketRef = useRef<Socket | null>(null)
+
+  useEffect(() => {
+    // Connect to the WebSocket server for broadcasting location updates
+    const socket = io()
+    socketRef.current = socket
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [])
+
   const handleSelect = useCallback(() => {
     const { centerLat, centerLng } = useMapViewStore.getState()
     log.info('SELECT pressed', { side, lat: centerLat.toFixed(4), lng: centerLng.toFixed(4) })
+
+    // Update location locally
     setExploreLocation(centerLat, centerLng)
+
+    // Broadcast to Wrap screen via WebSocket
+    if (socketRef.current) {
+      socketRef.current.emit('location:update', {
+        lat: centerLat,
+        lng: centerLng,
+      })
+      log.info('Location broadcast to Wrap screen via WebSocket')
+    }
   }, [side, setExploreLocation])
 
   // Rotation so controls face outward to the person at that edge

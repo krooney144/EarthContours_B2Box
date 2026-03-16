@@ -8,6 +8,25 @@
  * Uses the same skyline worker and rendering pipeline as ScanScreen but
  * with a fixed 360° horizontal FOV and no drag/gyro/zoom interaction.
  *
+ * ─── OSC / WEBSOCKET INTEGRATION ───
+ *
+ * This screen receives TWO types of real-time data:
+ *
+ * 1. TRACKER PORTALS (from motion capture via OSC)
+ *    - OSC addresses: /trk_1_xy_loc  and  /trk_2_xy_loc
+ *    - Args: [y_normalized, x_normalized, layer_fraction]
+ *    - These show glowing portal circles where the trackers are pointing
+ *
+ * 2. LOCATION UPDATES (from map screen via WebSocket)
+ *    - Event: "location:update"  with { lat, lng }
+ *    - When someone selects a location on the Map screen, this screen
+ *      updates its terrain to show the new location
+ *
+ * MOUSE SIMULATION:
+ *    - Press "M" key or click "SIM" button to toggle mouse simulation mode
+ *    - When SIM is ON, moving your mouse drives tracker portal 1
+ *    - This lets you test the portal overlay without real OSC hardware
+ *
  * Controls:
  *   - AGL height slider (right edge)
  *   - Coordinate/elevation overlay (bottom center, under North)
@@ -15,6 +34,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { io, Socket } from 'socket.io-client'
 import { useCameraStore, useLocationStore, useTerrainStore, useSettingsStore } from '../../store'
 import { createLogger } from '../../core/logger'
 import { MAX_HEIGHT_M, MIN_HEIGHT_M } from '../../core/constants'
@@ -33,6 +53,7 @@ import {
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
 } from '../ScanScreen/scanRendererCore'
+import TrackerPortal from '../../components/TrackerPortal'
 import styles from './B2WrapScreen.module.css'
 
 const log = createLogger('SCREEN:B2-WRAP')
@@ -69,6 +90,7 @@ const WRAP_HFOV    = 360
 const B2WrapScreen: React.FC = () => {
   const { height_m, setHeightFromSlider } = useCameraStore()
   const { activeLat, activeLng } = useLocationStore()
+  const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
   const { peaks } = useTerrainStore()
   const { units, showBandLines, showFill, showPeakLabels } = useSettingsStore()
 
@@ -89,6 +111,23 @@ const B2WrapScreen: React.FC = () => {
   const [osmPeaks, setOsmPeaks]                     = useState<Peak[]>([])
   const [peakPositions, setPeakPositions]           = useState<PeakScreenPos[]>([])
 
+  // ─── TRACKER PORTAL STATE ────────────────────────────────────────────────
+  // These track the positions of motion capture trackers from OSC.
+  // Each tracker has x,y (pixel coords) and a visible flag.
+  // trk_1_xy_loc → tracker1,  trk_2_xy_loc → tracker2
+
+  const [tracker1, setTracker1] = useState({ x: 0, y: 0, visible: false })
+  const [tracker2, setTracker2] = useState({ x: 0, y: 0, visible: false })
+
+  // ─── MOUSE SIMULATION MODE ──────────────────────────────────────────────
+  // When SIM is ON (default), mouse movement drives tracker portal 1.
+  // Toggle with the "SIM" button or press "M" key.
+  // This lets you test the portal overlay without real OSC hardware.
+
+  const [simMode, setSimMode] = useState(true)
+
+  // Keep a ref to the socket so we can access it in cleanup
+  const socketRef = useRef<Socket | null>(null)
 
   const activePeaks: Peak[] = osmPeaks.length > 0 ? osmPeaks : peaks
 
@@ -390,6 +429,115 @@ const B2WrapScreen: React.FC = () => {
     sliderDragRef.current.isDragging = false
   }, [])
 
+  // ─── SOCKET.IO + OSC CONNECTION ──────────────────────────────────────────
+  //
+  // This connects to the Express server (index.js) via Socket.IO.
+  // The server forwards all OSC messages as "osc" events.
+  //
+  // We listen for:
+  //   "osc" → tracker portals (trk_1_xy_loc, trk_2_xy_loc)
+  //   "location:update" → when the map screen selects a new location
+  //
+  // All OSC messages are logged to the browser console so you can
+  // see exactly what's coming in during testing.
+
+  useEffect(() => {
+    // Connect to the WebSocket server
+    // In dev: Vite proxies /socket.io to localhost:3000
+    // In production: same origin serves both
+    const socket = io()
+    socketRef.current = socket
+
+    socket.on('connect', () => {
+      log.info('WebSocket connected to server', { id: socket.id })
+    })
+
+    // ── OSC MESSAGE HANDLER ──────────────────────────────────────────────
+    // Every OSC message from the server arrives here.
+    // We check the address and update the tracker portal positions.
+    //
+    // OSC format from motion capture:
+    //   /trk_1_xy_loc  args: [y_normalized, x_normalized, layer_fraction]
+    //   /trk_2_xy_loc  args: [y_normalized, x_normalized, layer_fraction]
+    //
+    // The x,y values are normalized 0–1 (0=top-left, 1=bottom-right).
+    // We multiply by the screen size to get pixel coordinates.
+
+    socket.on('osc', (msg: { address: string; args: number[] }) => {
+      // Log every OSC message so you can see what's coming in
+      console.log('[B2-WRAP] OSC:', msg.address, msg.args)
+
+      if (msg.address === '/trk_1_xy_loc') {
+        // Tracker 1: args = [y_norm, x_norm, layer_fraction]
+        const xPixel = msg.args[1] * window.innerWidth
+        const yPixel = msg.args[0] * window.innerHeight
+        setTracker1({ x: xPixel, y: yPixel, visible: true })
+      }
+
+      if (msg.address === '/trk_2_xy_loc') {
+        // Tracker 2: same format as tracker 1
+        const xPixel = msg.args[1] * window.innerWidth
+        const yPixel = msg.args[0] * window.innerHeight
+        setTracker2({ x: xPixel, y: yPixel, visible: true })
+      }
+    })
+
+    // ── LOCATION UPDATE FROM MAP SCREEN ──────────────────────────────────
+    // When someone presses SELECT on the map screen, it emits this event.
+    // We update our location store so the terrain re-renders for the new spot.
+
+    socket.on('location:update', (data: { lat: number; lng: number }) => {
+      log.info('Location update from map screen', {
+        lat: data.lat.toFixed(4),
+        lng: data.lng.toFixed(4),
+      })
+      setExploreLocation(data.lat, data.lng)
+    })
+
+    socket.on('disconnect', () => {
+      log.warn('WebSocket disconnected from server')
+    })
+
+    // Cleanup: disconnect when component unmounts
+    return () => {
+      socket.disconnect()
+      socketRef.current = null
+    }
+  }, [setExploreLocation])
+
+  // ─── MOUSE SIMULATION FOR TESTING ───────────────────────────────────────
+  //
+  // When simMode is ON, mouse movement drives tracker portal 1.
+  // This lets you test the portal overlay without real OSC hardware.
+  // Press "M" key to toggle sim mode on/off.
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!simMode) return
+      // Convert mouse position to same coords as OSC tracker
+      setTracker1({
+        x: e.clientX,
+        y: e.clientY,
+        visible: true,
+      })
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Press M to toggle mouse simulation mode
+      if (e.key === 'm' || e.key === 'M') {
+        setSimMode(prev => !prev)
+      }
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [simMode])
+
   // ── Loading state ───────────────────────────────────────────────────────
 
   const isLoading = isSkylineComputing
@@ -399,6 +547,16 @@ const B2WrapScreen: React.FC = () => {
   return (
     <div className={styles.screen}>
       <Link to="/" className={styles.backLink}>← Back</Link>
+
+      {/* SIM MODE TOGGLE — small button in top-right corner */}
+      {/* Click this to switch between mouse simulation and real OSC input */}
+      <button
+        className={styles.simToggle}
+        onClick={() => setSimMode(prev => !prev)}
+        title={simMode ? 'Mouse simulation ON — click or press M to toggle' : 'Mouse simulation OFF — only real OSC data. Click or press M to toggle'}
+      >
+        {simMode ? 'SIM ON' : 'SIM OFF'}
+      </button>
 
       <div
         ref={containerRef}
@@ -410,6 +568,12 @@ const B2WrapScreen: React.FC = () => {
           width={WRAP_W}
           height={WRAP_H}
         />
+
+        {/* ── TRACKER PORTALS ─────────────────────────────────────────── */}
+        {/* These glowing circles show where motion capture trackers are  */}
+        {/* pointing. In SIM mode, tracker 1 follows your mouse cursor.  */}
+        <TrackerPortal x={tracker1.x} y={tracker1.y} label="1" visible={tracker1.visible} />
+        <TrackerPortal x={tracker2.x} y={tracker2.y} label="2" visible={tracker2.visible} />
 
         {/* Cardinal direction markers */}
         <div className={styles.cardinalMarker} style={{ left: '50%' }}>S</div>

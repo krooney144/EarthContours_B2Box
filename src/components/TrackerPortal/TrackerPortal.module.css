@@ -1,0 +1,72 @@
+/**
+ * TrackerPortal styles — Ocean-themed glowing target reticle
+ *
+ * The portal is a pulsing circle with an outer ring, inner glow,
+ * and a tracker number. Uses the ocean color palette from palette.css.
+ */
+
+/* Container — centers everything at the tracker position */
+.portal {
+  position: absolute;
+  transform: translate(-50%, -50%);  /* Center on the x,y point */
+  pointer-events: none;              /* Don't block canvas interaction */
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+}
+
+/* Outer pulsing ring — slow breath animation */
+.outerRing {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 2px solid var(--color-glow, #00e5ff);
+  opacity: 0.6;
+  animation: portalPulse 2s ease-in-out infinite;
+}
+
+/* Inner glowing circle — solid center dot */
+.innerRing {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    var(--color-glow, #00e5ff) 0%,
+    var(--color-reef, #0097a7) 60%,
+    transparent 100%
+  );
+  opacity: 0.9;
+  box-shadow:
+    0 0 12px var(--color-glow, #00e5ff),
+    0 0 24px rgba(0, 229, 255, 0.3);
+}
+
+/* Tracker number label */
+.label {
+  position: absolute;
+  top: -20px;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--color-glow, #00e5ff);
+  text-shadow: 0 0 6px rgba(0, 229, 255, 0.5);
+  letter-spacing: 1px;
+}
+
+/* Slow pulsing animation for the outer ring */
+@keyframes portalPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.3;
+  }
+}

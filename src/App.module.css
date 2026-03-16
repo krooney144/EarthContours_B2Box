@@ -1,71 +1,62 @@
 /**
- * App-level layout styles
+ * App-level layout styles — B2 Black Box Exhibit
  */
 
-.app {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  background: var(--ec-bg-primary);
+/* ── Launcher Page ─────────────────────────────────────────────────────────── */
+/* Simple centered page with links to the three exhibit screens. */
+
+.launcher {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--ec-bg-primary, #000810);
+  color: var(--ec-text-primary, #e0f7fa);
+  font-family: system-ui, sans-serif;
+  gap: 12px;
 }
 
-/* ── Screen container ──────────────────────────────────────────────────────── */
-
-.screenContainer {
-  position: absolute;
-  inset: 0;
-  /* Make room for the nav bar at the bottom */
-  bottom: var(--ec-nav-height);
+.launcherTitle {
+  font-size: 32px;
+  font-weight: 300;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--ec-text-primary, #e0f7fa);
+  margin: 0;
 }
 
-/* When in preview mode, screen container fills full height (no nav offset) */
-.screenContainer.previewMode {
-  bottom: 0;
+.launcherSubtitle {
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--ec-text-secondary, #80cbc4);
+  margin: 0 0 24px 0;
 }
 
-/* ── Screen transitions ────────────────────────────────────────────────────── */
-
-/* Screens animate in/out during navigation transitions */
-.screenWrapper {
-  position: absolute;
-  inset: 0;
-  will-change: opacity, transform;
+.launcherLinks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 280px;
 }
 
-.screenWrapper.idle {
-  opacity: 1;
-  transform: scale(1);
+.launcherLink {
+  display: block;
+  padding: 14px 24px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: var(--ec-text-primary, #e0f7fa);
+  background: var(--ec-bg-elevated, #0a1628);
+  border: 1px solid var(--ec-border, #1a3a5c);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-/* Exit: current screen zooms out and fades */
-.screenWrapper.exit {
-  animation: zoom-out 300ms ease-in forwards;
-}
-
-/* Black: brief invisible state while screen swaps */
-.screenWrapper.black {
-  opacity: 0;
-}
-
-/* Enter: new screen zooms in and fades */
-.screenWrapper.enter {
-  animation: zoom-in 300ms ease-out forwards;
-}
-
-/* ── Transition overlay ────────────────────────────────────────────────────── */
-
-/* Full-black overlay during the 'black' phase */
-.transitionOverlay {
-  position: absolute;
-  inset: 0;
-  background: #000010;
-  z-index: var(--z-transition);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 100ms ease-out;
-}
-
-.transitionOverlay.visible {
-  opacity: 1;
+.launcherLink:hover {
+  background: var(--ec-deep, #0d2137);
+  border-color: var(--ec-glow, #00e5ff);
 }

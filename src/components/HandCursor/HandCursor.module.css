@@ -1,0 +1,41 @@
+/**
+ * HandCursor styles — MediaPipe hand tracking cursor
+ *
+ * Simple cursor with a hand icon and L/R label.
+ * Glows brighter when in "closed fist" (active/click) state.
+ */
+
+/* Container — positioned at the hand location */
+.cursor {
+  position: absolute;
+  pointer-events: none;              /* Don't block map interaction */
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: filter 0.15s ease;
+}
+
+/* When fist is closed (clicking), add a glow effect */
+.cursorActive {
+  filter: drop-shadow(0 0 12px var(--color-glow, #00e5ff));
+}
+
+/* The hand emoji/icon */
+.icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+/* L/R hand label */
+.label {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--color-foam, #e0f7fa);
+  background: rgba(0, 0, 0, 0.5);
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 1px;
+}

@@ -1,159 +1,75 @@
 /**
- * EarthContours — Root Application Component
+ * EarthContours B2 — Root Application Component
  *
- * App.tsx is the top-level shell. It:
- * 1. Shows the SplashScreen on first load
- * 2. Manages the preview layout (desktop) vs single-screen (mobile)
- * 3. Renders the active screen with transition animations
- * 4. Wraps each screen in an ErrorBoundary (so crashes are isolated)
- * 5. Shows the Nav bar at the bottom (except in preview mode)
+ * Simple React Router shell for the B2 Black Box exhibit.
+ * Each screen runs in its own browser window — no nav bar, no transitions,
+ * no splash screen. Just URL-based routing to the three exhibit screens.
  *
- * The routing system uses Zustand (uiStore) instead of URL routing because:
- * - Native app feel — no URL changes
- * - Custom zoom transitions between screens
- * - Complex state (e.g., 3D camera) persists between screen visits
- *
- * React Router is used ONLY for the 4 B2/dev pages (/b2-wrap, /b2-wrap-v2,
- * /b2-map, /scan2) which need real URLs for venue projection access.
- * The root / route renders the existing Zustand-based app unchanged.
+ * Screens:
+ *   /b2-wrap   → 360° panorama projection (10880×1080)
+ *   /b2-map    → Top-down map table projection (1920×1080)
+ *   /settings  → Tech team settings panel
+ *   /          → Launcher page with links to all screens
  */
 
-import React, { useEffect } from 'react'
-import { Routes, Route } from 'react-router-dom'
-import { useUIStore, useSettingsStore } from './store'
-import SplashScreen from './components/SplashScreen'
-import Nav from './components/Nav'
+import React from 'react'
+import { Routes, Route, Link } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
-import PreviewLayout from './components/PreviewLayout'
-import ScanScreen from './screens/ScanScreen'
-import ExploreScreen from './screens/ExploreScreen'
-import MapScreen from './screens/MapScreen'
-import SettingsScreen from './screens/SettingsScreen'
 import B2WrapScreen from './screens/B2WrapScreen'
-import B2WrapV2Screen from './screens/B2WrapV2Screen'
 import B2MapScreen from './screens/B2MapScreen'
-import Scan2Screen from './screens/Scan2Screen'
-import { createLogger, appLog } from './core/logger'
+import SettingsScreen from './screens/SettingsScreen'
+import { createLogger } from './core/logger'
 import styles from './App.module.css'
 
 const log = createLogger('APP')
 
-// ─── Screen Registry ──────────────────────────────────────────────────────────
+// ─── Launcher Page ──────────────────────────────────────────────────────────
+// Simple landing page with links to the three screens.
+// Each link opens in a new browser window for the exhibit.
 
-/**
- * Map of screen ID → component.
- * All screens are imported statically (not lazy-loaded) for the MVP.
- * In Session 2, we may use React.lazy() for code-splitting.
- */
-const SCREENS: Record<string, React.ReactNode> = {
-  scan:     <ScanScreen />,
-  explore:  <ExploreScreen />,
-  map:      <MapScreen />,
-  settings: <SettingsScreen />,
-}
-
-// ─── Main App (Zustand-routed) ───────────────────────────────────────────────
-
-const MainApp: React.FC = () => {
-  const {
-    activeScreen,
-    isPreviewMode,
-    splashComplete,
-    transitionState,
-  } = useUIStore()
-
-  const { reduceMotion } = useSettingsStore()
-
-  // ── Side Effects ────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    appLog.info('App mounted', {
-      screen: activeScreen,
-      isPreviewMode,
-      userAgent: navigator.userAgent,
-      windowSize: `${window.innerWidth}×${window.innerHeight}`,
-    })
-    document.title = 'Earth Contours'
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Apply reduce-motion class to body when setting is on
-  // (enables the CSS reduce-motion override in global.css)
-  useEffect(() => {
-    if (reduceMotion) {
-      document.body.classList.add('reduce-motion')
-      log.info('Reduce motion mode enabled')
-    } else {
-      document.body.classList.remove('reduce-motion')
-    }
-  }, [reduceMotion])
-
-  // ── Render ──────────────────────────────────────────────────────────────────
-
-  log.debug('App render', {
-    activeScreen,
-    isPreviewMode,
-    splashComplete,
-    transitionState,
-  })
+const Launcher: React.FC = () => {
+  log.info('Launcher mounted')
 
   return (
-    <div className={styles.app}>
-      {/* Splash Screen — always rendered until splashComplete */}
-      {!splashComplete && <SplashScreen />}
-
-      {/* Main content — shown once splash is done */}
-      {splashComplete && (
-        <>
-          {/* Preview mode: desktop command center showing all screens */}
-          {isPreviewMode ? (
-            <ErrorBoundary screenName="Preview">
-              <PreviewLayout />
-            </ErrorBoundary>
-          ) : (
-            /* Single-screen mode: one active screen with transitions */
-            <>
-              {/* Screen container — offset by nav height */}
-              <div className={`${styles.screenContainer}`}>
-                {/* Transition wrapper applies zoom-in/zoom-out animations */}
-                <div className={`${styles.screenWrapper} ${styles[transitionState]}`}>
-                  <ErrorBoundary
-                    screenName={activeScreen.charAt(0).toUpperCase() + activeScreen.slice(1)}
-                    key={activeScreen}  // Force ErrorBoundary reset on screen change
-                  >
-                    {SCREENS[activeScreen]}
-                  </ErrorBoundary>
-                </div>
-              </div>
-
-              {/* Brief black flash during screen transition */}
-              <div
-                className={`${styles.transitionOverlay} ${transitionState === 'black' ? styles.visible : ''}`}
-                aria-hidden="true"
-              />
-
-              {/* Navigation bar — always visible in single-screen mode */}
-              <Nav />
-            </>
-          )}
-        </>
-      )}
+    <div className={styles.launcher}>
+      <h1 className={styles.launcherTitle}>EarthContours B2</h1>
+      <p className={styles.launcherSubtitle}>Black Box Exhibit</p>
+      <div className={styles.launcherLinks}>
+        <Link to="/b2-wrap" className={styles.launcherLink}>
+          Wrap Screen (360°)
+        </Link>
+        <Link to="/b2-map" className={styles.launcherLink}>
+          Map Screen (Table)
+        </Link>
+        <Link to="/settings" className={styles.launcherLink}>
+          Settings
+        </Link>
+      </div>
     </div>
   )
 }
 
-// ─── App Component (Router shell) ────────────────────────────────────────────
+// ─── App Component ──────────────────────────────────────────────────────────
 
 const App: React.FC = () => {
   return (
     <Routes>
-      {/* B2/Dev pages — fullscreen, no nav, no splash */}
-      <Route path="/b2-wrap" element={<B2WrapScreen />} />
-      <Route path="/b2-wrap-v2" element={<B2WrapV2Screen />} />
-      <Route path="/b2-map" element={<B2MapScreen />} />
-      <Route path="/scan2" element={<Scan2Screen />} />
-
-      {/* Root — existing Zustand-based app (splash, nav, transitions) */}
-      <Route path="/*" element={<MainApp />} />
+      <Route path="/b2-wrap" element={
+        <ErrorBoundary screenName="B2Wrap">
+          <B2WrapScreen />
+        </ErrorBoundary>
+      } />
+      <Route path="/b2-map" element={
+        <ErrorBoundary screenName="B2Map">
+          <B2MapScreen />
+        </ErrorBoundary>
+      } />
+      <Route path="/settings" element={
+        <ErrorBoundary screenName="Settings">
+          <SettingsScreen />
+        </ErrorBoundary>
+      } />
+      <Route path="/*" element={<Launcher />} />
     </Routes>
   )
 }

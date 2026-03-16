@@ -3,9 +3,10 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Terrain visualization app — AR first-person, 3D orbit, and 2D topo map views",
+  "description": "EarthContours B2 — Black Box exhibit terrain visualization",
   "scripts": {
     "dev": "vite",
+    "server": "node index.cjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
@@ -13,9 +14,13 @@
     "geo": "node scripts/processGeoData.mjs"
   },
   "dependencies": {
+    "express": "^5.2.1",
+    "osc": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.13.1",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "three": "^0.160.1",
     "zustand": "^4.5.2"
   },
