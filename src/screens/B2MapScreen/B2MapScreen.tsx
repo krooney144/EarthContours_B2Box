@@ -192,18 +192,33 @@ const B2MapScreen: React.FC = () => {
       lng: centerLng.toFixed(4),
     })
 
-    // Update location locally
+    // Update location locally — the store subscription above
+    // automatically broadcasts to the Wrap screen via WebSocket
     setExploreLocation(centerLat, centerLng)
-
-    // Broadcast to Wrap screen via WebSocket
-    if (socketRef.current) {
-      socketRef.current.emit('location:update', {
-        lat: centerLat,
-        lng: centerLng,
-      })
-      log.info('Location broadcast to Wrap screen via WebSocket')
-    }
   }, [setExploreLocation])
+
+  // ─── BROADCAST LOCATION CHANGES TO WRAP SCREEN ─────────────────────────
+  // Subscribe to locationStore — whenever activeLat/activeLng change
+  // (from map click, SELECT button, fist-select, etc.), broadcast via
+  // WebSocket so the Wrap screen updates its terrain.
+
+  useEffect(() => {
+    const unsub = useLocationStore.subscribe((state, prevState) => {
+      if (state.activeLat !== prevState.activeLat || state.activeLng !== prevState.activeLng) {
+        if (socketRef.current) {
+          socketRef.current.emit('location:update', {
+            lat: state.activeLat,
+            lng: state.activeLng,
+          })
+          log.info('Location broadcast to Wrap screen', {
+            lat: state.activeLat.toFixed(4),
+            lng: state.activeLng.toFixed(4),
+          })
+        }
+      }
+    })
+    return unsub
+  }, [])
 
   // ─── MOUSE SIMULATION FOR TESTING ───────────────────────────────────────
   //
