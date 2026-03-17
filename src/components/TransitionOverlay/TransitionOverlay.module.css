@@ -1,0 +1,30 @@
+/**
+ * TransitionOverlay — Full-canvas overlay for the wave/sweep animation.
+ *
+ * ─── PLACEHOLDER ANIMATION — TUNE THESE VALUES ───
+ *
+ * This overlay sits on top of the 360° wrap terrain canvas.
+ * The actual animation is drawn via Canvas 2D in TransitionOverlay.tsx —
+ * this CSS just positions and sizes the canvas element.
+ *
+ * To change the look:
+ *   - Overlay stacking: edit z-index (currently 18, above terrain/labels)
+ *   - Canvas upscale quality: change image-rendering (auto = bilinear, pixelated = sharp pixels)
+ *   - Canvas resolution: edit CANVAS_W / CANVAS_H in TransitionOverlay.tsx
+ *     (currently half-res 5440×540 stretched to full 10880×1080 via CSS)
+ */
+
+/* ── Overlay canvas: covers the full wrap screen area ──────────────────── */
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* Click-through — don't block terrain interaction */
+  z-index: 18; /* Above terrain (1), peak labels (5), cardinal markers (10), below loading (20) */
+  /* TUNE: Half-res canvas stretched to full size — saves 75% GPU work.
+   *   'auto' = bilinear interpolation (smooth, good for projected display)
+   *   'pixelated' = nearest-neighbor (sharp pixels, retro look)
+   *   At projection distance (~3m), half-res is indistinguishable from full-res. */
+  image-rendering: auto;
+}

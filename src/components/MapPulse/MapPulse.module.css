@@ -1,0 +1,87 @@
+/**
+ * MapPulse — CSS-only expanding rings centered on the map crosshair.
+ *
+ * ─── PLACEHOLDER ANIMATION — TUNE THESE VALUES ───
+ *
+ * To change the look:
+ *   - Ring max size: edit width/height at 100% in @keyframes pulse-expand
+ *   - Ring speed: edit animation duration on .ring (currently 2.2s)
+ *   - Ring stagger: edit animation-delay on .ring1/.ring2/.ring3
+ *   - Ring colors: edit border-color on .ring1/.ring2/.ring3
+ *   - Ring glow: edit box-shadow in @keyframes pulse-expand
+ *   - Ring count: add .ring4 etc (and corresponding div in MapPulse.tsx)
+ *   - Easing curve: change ease-out on .ring animation to any CSS easing
+ */
+
+/* ── Container: covers the full map area, clips rings at edges ──────────── */
+.container {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 16; /* Above crosshair (15), below controls */
+  overflow: hidden; /* Rings expand beyond map bounds — clip them */
+}
+
+/* ── Pulse group: positions all rings at center ─────────────────────────── */
+.pulseGroup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* ── Individual ring: shared base styles ────────────────────────────────── */
+.ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;  /* Starting size — animation grows this */
+  height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--ec-glow, #84D1DB);
+  opacity: 0; /* Starts invisible, animation controls opacity */
+  /* TUNE: duration (2.2s), easing (ease-out) */
+  animation: pulse-expand 2.2s ease-out forwards;
+}
+
+/* ── Per-ring overrides: stagger delay + color ──────────────────────────── */
+
+/* First ring — fires immediately, brightest color */
+.ring1 {
+  animation-delay: 0ms;
+  border-color: var(--ec-glow, #84D1DB); /* Brightest */
+}
+
+/* Second ring — 250ms behind, mid-tone */
+.ring2 {
+  animation-delay: 250ms;
+  border-color: var(--ec-mid, #4B8EA3); /* Mid-tone */
+}
+
+/* Third ring — 500ms behind, subtler color + thinner border */
+.ring3 {
+  animation-delay: 500ms;
+  border-color: var(--ec-reef, #68B0BF); /* Subtle */
+  border-width: 1px; /* Thinner than other rings */
+}
+
+/* ── Ring expansion animation ───────────────────────────────────────────── */
+/* TUNE: start/end sizes, opacity curve, glow intensity */
+@keyframes pulse-expand {
+  0% {
+    width: 20px;
+    height: 20px;
+    opacity: 0.9;
+    box-shadow: 0 0 20px rgba(132, 209, 219, 0.6); /* Bright glow at start */
+  }
+  50% {
+    opacity: 0.5; /* Half-faded at midpoint */
+  }
+  100% {
+    width: 2200px;   /* Must be > map diagonal (~1920√2 ≈ 2715) to hit corners */
+    height: 2200px;  /* 2200 covers most of the map area */
+    opacity: 0;
+    box-shadow: 0 0 4px rgba(132, 209, 219, 0); /* Glow fades to nothing */
+  }
+}

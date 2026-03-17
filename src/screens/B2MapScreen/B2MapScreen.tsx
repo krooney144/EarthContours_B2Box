@@ -52,6 +52,7 @@ import { createLogger } from '../../core/logger'
 import MapScreen from '../MapScreen/MapScreen'
 import ControlStrip from './ControlStrip'
 import HandCursor from '../../components/HandCursor'
+import MapPulse from '../../components/MapPulse'
 import type { HandState, HandSide } from '../../components/HandCursor'
 import styles from './B2MapScreen.module.css'
 
@@ -93,6 +94,7 @@ const B2MapScreen: React.FC = () => {
   // Toggle with "SIM" button or "M" key.
 
   const [simMode, setSimMode] = useState(true)
+  const [pulseTrigger, setPulseTrigger] = useState(0)
 
   // ─── SOCKET.IO + OSC CONNECTION ────────────────────────────────────────
   //
@@ -205,6 +207,9 @@ const B2MapScreen: React.FC = () => {
   useEffect(() => {
     const unsub = useLocationStore.subscribe((state, prevState) => {
       if (state.activeLat !== prevState.activeLat || state.activeLng !== prevState.activeLng) {
+        // Trigger the pulse animation on the map
+        setPulseTrigger(prev => prev + 1)
+
         if (socketRef.current) {
           socketRef.current.emit('location:update', {
             lat: state.activeLat,
@@ -241,7 +246,6 @@ const B2MapScreen: React.FC = () => {
 
     const handleMouseDown = () => {
       if (!simMode) return
-      // Mouse button down = closed fist
       setHand1(prev => ({ ...prev, state: 'closed' }))
     }
 
@@ -307,6 +311,8 @@ const B2MapScreen: React.FC = () => {
             <div className={styles.crosshairV} />
             <div className={styles.crosshairDot} />
           </div>
+          {/* Pulse rings on location select — from click point */}
+          <MapPulse trigger={pulseTrigger} />
         </div>
 
         <div className={styles.rightStrip}>

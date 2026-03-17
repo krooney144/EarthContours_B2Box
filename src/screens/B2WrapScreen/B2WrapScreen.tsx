@@ -54,6 +54,7 @@ import {
   drawSkyAndStars, drawHorizonGlow,
 } from '../ScanScreen/scanRendererCore'
 import TrackerPortal from '../../components/TrackerPortal'
+import TransitionOverlay from '../../components/TransitionOverlay'
 import styles from './B2WrapScreen.module.css'
 
 const log = createLogger('SCREEN:B2-WRAP')
@@ -118,6 +119,10 @@ const B2WrapScreen: React.FC = () => {
 
   const [tracker1, setTracker1] = useState({ x: 0, y: 0, visible: false })
   const [tracker2, setTracker2] = useState({ x: 0, y: 0, visible: false })
+
+  // ─── TRANSITION ANIMATION STATE ────────────────────────────────────────
+  const [transitionActive, setTransitionActive] = useState(false)
+  const [transitionSettling, setTransitionSettling] = useState(false)
 
   // ─── MOUSE SIMULATION MODE ──────────────────────────────────────────────
   // When SIM is ON (default), mouse movement drives tracker portal 1.
@@ -300,6 +305,8 @@ const B2WrapScreen: React.FC = () => {
         setIsSkylineComputing(false)
         setSkylineProgress(1)
         setRefinedArcs([])
+        // Signal transition overlay to start settling/fading
+        setTransitionSettling(true)
       } else if (type === 'refined-arcs') {
         const arcs = e.data.refinedArcs as RefinedArc[]
         log.info('Refined arcs received', { count: arcs.length })
@@ -478,6 +485,9 @@ const B2WrapScreen: React.FC = () => {
         lat: data.lat.toFixed(4),
         lng: data.lng.toFixed(4),
       })
+      // Start transition animation
+      setTransitionSettling(false)
+      setTransitionActive(true)
       setExploreLocation(data.lat, data.lng)
     })
 
@@ -554,6 +564,17 @@ const B2WrapScreen: React.FC = () => {
           className={styles.terrainCanvas}
           width={WRAP_W}
           height={WRAP_H}
+        />
+
+        {/* ── TRANSITION OVERLAY ──────────────────────────────────────── */}
+        {/* Wave animation during location transitions                    */}
+        <TransitionOverlay
+          active={transitionActive}
+          settling={transitionSettling}
+          onComplete={() => {
+            setTransitionActive(false)
+            setTransitionSettling(false)
+          }}
         />
 
         {/* ── TRACKER PORTALS ─────────────────────────────────────────── */}
