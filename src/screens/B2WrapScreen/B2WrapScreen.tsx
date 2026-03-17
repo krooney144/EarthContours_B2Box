@@ -38,7 +38,7 @@ import { io, Socket } from 'socket.io-client'
 import { useCameraStore, useLocationStore, useTerrainStore, useSettingsStore } from '../../store'
 import { createLogger } from '../../core/logger'
 import { MAX_HEIGHT_M, MIN_HEIGHT_M } from '../../core/constants'
-import { formatElevation, metersToFeet } from '../../core/utils'
+import { formatElevation, metersToFeet, headingToCompass } from '../../core/utils'
 import { fetchPeaksNear } from '../../data/peakLoader'
 import type { Peak, SkylineData, RefinedArc, PeakRefineItem } from '../../core/types'
 import { DEPTH_BANDS } from '../../core/types'
@@ -205,7 +205,7 @@ const B2WrapScreen: React.FC = () => {
     // 4. Horizon glow
     drawHorizonGlow(ctx, cam)
 
-    // 5. Peak dots (all 360°, no FOV filtering — isPeakVisible uses hfov=360)
+    // 5. Peak positions (computed for HTML overlay labels)
     const eyeElev = groundElev + height_m
     const newPositions: PeakScreenPos[] = []
 
@@ -240,7 +240,6 @@ const B2WrapScreen: React.FC = () => {
         )
 
         if (peakAngle <= ridgeAngle + 0.002) {
-          // Check per-band for best snap
           let maxBandAngle = -Math.PI / 2
           for (let bi = 0; bi < skylineData.bands.length; bi++) {
             const ba = bandAngleAt(skylineData, bi, bearing, projectedBands)
@@ -251,18 +250,6 @@ const B2WrapScreen: React.FC = () => {
             if (snapped.y < screenY) screenY = snapped.y
           }
         }
-
-        // Draw peak dot on canvas
-        ctx.beginPath()
-        ctx.arc(screenX, screenY, 4 * renderScale, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(167, 221, 229, 0.9)'
-        ctx.fill()
-
-        // Draw peak name
-        ctx.font = `${Math.round(11 * renderScale)}px system-ui, sans-serif`
-        ctx.fillStyle = 'rgba(240, 248, 255, 0.85)'
-        ctx.textAlign = 'center'
-        ctx.fillText(peak.name, screenX, screenY - 10 * renderScale)
 
         newPositions.push({
           id: `${peak.lat}-${peak.lng}`,
@@ -575,6 +562,20 @@ const B2WrapScreen: React.FC = () => {
         <TrackerPortal x={tracker1.x} y={tracker1.y} label="1" visible={tracker1.visible} />
         <TrackerPortal x={tracker2.x} y={tracker2.y} label="2" visible={tracker2.visible} />
 
+        {/* ── PEAK LABELS (HTML overlay) ──────────────────────────────── */}
+        {showPeakLabels && peakPositions.length > 0 && (
+          <div className={styles.peakLabelsLayer} aria-label="Peak labels">
+            {peakPositions.map((pos) => (
+              <PeakLabel
+                key={pos.id}
+                pos={pos}
+                units={units}
+                canvasH={WRAP_H}
+              />
+            ))}
+          </div>
+        )}
+
         {/* Cardinal direction markers */}
         <div className={styles.cardinalMarker} style={{ left: '50%' }}>S</div>
         <div className={styles.cardinalMarker} style={{ left: '75%' }}>W</div>
@@ -662,6 +663,55 @@ const B2WrapScreen: React.FC = () => {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Sub-Components ───────────────────────────────────────────────────────────
+
+const PeakLabel: React.FC<{
+  pos: PeakScreenPos
+  units: 'imperial' | 'metric'
+  canvasH: number
+}> = ({ pos, units, canvasH }) => {
+  const distFade  = Math.max(0.25, 1 - Math.pow(pos.dist_km / (MAX_PEAK_DIST / 1000), 0.5))
+  const isNearTop = pos.screenY < canvasH * 0.22
+
+  const card = (
+    <div className={styles.peakCard} aria-hidden="true">
+      <span className={styles.peakName}>{pos.name}</span>
+      <span className={styles.peakElev}>{formatElevation(pos.elevation_m, units)}</span>
+      <span className={styles.peakBearing}>
+        {headingToCompass(pos.bearing)} · {pos.dist_km.toFixed(0)} km
+      </span>
+    </div>
+  )
+
+  const DOT_HALF = 4
+  const posStyle: React.CSSProperties = isNearTop
+    ? { left: `${pos.screenX}px`, top: `${pos.screenY - DOT_HALF}px`, opacity: distFade }
+    : { left: `${pos.screenX}px`, bottom: `${canvasH - pos.screenY - DOT_HALF}px`, opacity: distFade }
+
+  return (
+    <div
+      className={`${styles.peakLabel} ${isNearTop ? styles.peakLabelFlipped : ''}`}
+      style={posStyle}
+      role="img"
+      aria-label={`${pos.name}, ${formatElevation(pos.elevation_m, units)}, ${pos.dist_km.toFixed(0)} km`}
+    >
+      {isNearTop ? (
+        <>
+          <div className={styles.peakDot}              aria-hidden="true" />
+          <div className={`${styles.peakLine} ${styles.peakLineDown}`} aria-hidden="true" />
+          {card}
+        </>
+      ) : (
+        <>
+          {card}
+          <div className={styles.peakLine}  aria-hidden="true" />
+          <div className={styles.peakDot}   aria-hidden="true" />
+        </>
+      )}
     </div>
   )
 }

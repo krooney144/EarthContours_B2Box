@@ -247,3 +247,92 @@
 .backLink:hover {
   opacity: 1;
 }
+
+/* ── Peak Labels (HTML overlay — frosted glass cards) ──────────────────── */
+
+.peakLabelsLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.peakLabel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  transform: translateX(-50%);
+  transition: opacity 0.3s ease;
+}
+
+.peakLabelFlipped {
+  /* JSX reverses the child order for this variant */
+}
+
+.peakCard {
+  background: rgba(10, 22, 38, 0.90);
+  border: 1px solid var(--ec-border-active);
+  border-radius: var(--radius-md);
+  padding: 5px 10px 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  box-shadow: var(--shadow-card), var(--shadow-glow);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  white-space: nowrap;
+  min-width: 72px;
+}
+
+.peakName {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--ec-foam);
+  text-shadow: 0 0 10px rgba(132, 209, 219, 0.55);
+  text-transform: uppercase;
+}
+
+.peakElev {
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--ec-glow);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.peakBearing {
+  font-family: var(--font-body);
+  font-size: 9px;
+  color: var(--ec-text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.peakLine {
+  width: 1px;
+  height: 38px;
+  background: linear-gradient(to bottom, rgba(132, 209, 219, 0.6), rgba(132, 209, 219, 0.08));
+  box-shadow: 0 0 4px rgba(132, 209, 219, 0.3);
+}
+.peakLineDown {
+  background: linear-gradient(to top, rgba(132, 209, 219, 0.6), rgba(132, 209, 219, 0.08));
+}
+
+.peakDot {
+  width: 8px;
+  height: 8px;
+  background: var(--ec-glow);
+  border-radius: 50%;
+  box-shadow: 0 0 8px var(--ec-glow), 0 0 16px rgba(132, 209, 219, 0.3);
+  animation: pulse-glow 2.5s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 6px var(--ec-glow); opacity: 1; }
+  50%       { box-shadow: 0 0 14px var(--ec-glow), 0 0 24px rgba(132, 209, 219, 0.4); opacity: 0.85; }
+}
