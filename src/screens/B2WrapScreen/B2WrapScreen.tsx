@@ -466,7 +466,9 @@ const B2WrapScreen: React.FC = () => {
         const xPixel = msg.args[1] * window.innerWidth
         const yPixel = msg.args[0] * window.innerHeight
         setTracker1({ x: xPixel, y: yPixel, visible: true })
+        console.log(xPixel)
       }
+
 
       if (msg.address === '/trk_2_xy_loc') {
         // Tracker 2: same format as tracker 1

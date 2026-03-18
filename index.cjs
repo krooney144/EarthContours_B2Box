@@ -69,7 +69,7 @@ udpPort.on("ready", () => {
 // When an OSC message arrives, forward it to ALL connected browser windows
 udpPort.on("message", (oscMsg) => {
   // Log it so you can see what's coming in during testing
-  console.log("OSC received:", oscMsg.address, oscMsg.args.map(a => a.value ?? a));
+  //console.log("OSC HELLO received:", oscMsg.address, oscMsg.args.map(a => a.value ?? a));
 
   // Forward the raw OSC message to every connected browser
   // Each screen (wrap, map, settings) will filter for the addresses it cares about
