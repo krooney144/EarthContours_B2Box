@@ -50,19 +50,18 @@
   background: rgba(0, 40, 80, 0.9);
 }
 
-/* ── Height Slider (horizontal, bottom edge) ─────────────────────────────── */
+/* ── Height Slider (vertical, left edge) ──────────────────────────────────── */
 
 .heightSlider {
   position: absolute;
-  left: 120px;
-  right: 120px;
+  left: 80px;
+  top: 60px;
   bottom: 120px;
-  height: 50px;
+  width: 60px;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
   z-index: 10;
 }
 
@@ -72,38 +71,40 @@
   color: var(--ec-text-muted);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
 }
 
 .heightSliderTrack {
   flex: 1;
-  height: 4px;
+  width: 4px;
   background: var(--ec-border);
   border-radius: var(--radius-full);
   position: relative;
+  margin: var(--space-2) 0;
   touch-action: none;
 }
 
 .heightSliderFill {
   position: absolute;
+  bottom: 0;
   left: 0;
-  top: 0;
-  height: 100%;
-  background: linear-gradient(to right, var(--ec-ocean), var(--ec-glow));
+  width: 100%;
+  background: linear-gradient(to top, var(--ec-ocean), var(--ec-glow));
   border-radius: var(--radius-full);
   box-shadow: 0 0 6px var(--ec-glow);
 }
 
 .heightSliderThumb {
   position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  left: 50%;
+  transform: translate(-50%, 50%);
   width: 40px;
   height: 40px;
   background: var(--ec-glow);
   border-radius: 50%;
   box-shadow: var(--shadow-glow);
-  cursor: ew-resize;
+  cursor: ns-resize;
 }
 
 .heightSliderValue {
@@ -113,8 +114,6 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
   letter-spacing: 0.05em;
-  white-space: nowrap;
-  min-width: 80px;
 }
 
 /* ── Coordinate Overlay (bottom center) ───────────────────────────────────── */
