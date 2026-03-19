@@ -1,0 +1,92 @@
+/**
+ * ScopeOverlay styles — Circular magnified terrain scope
+ *
+ * Ocean-themed scope with ring, crosshair, and distance readout.
+ */
+
+/* Container — centers on the tracker position */
+.scope {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 90;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+/* The clipped terrain canvas fills the scope circle */
+.scopeCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+/* Outer ring — glowing border */
+.scopeRing {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--ec-glow, #84D1DB);
+  box-shadow:
+    0 0 12px rgba(132, 209, 219, 0.4),
+    inset 0 0 8px rgba(132, 209, 219, 0.15);
+  pointer-events: none;
+}
+
+/* Crosshair lines */
+.crosshairH,
+.crosshairV {
+  position: absolute;
+  background: rgba(132, 209, 219, 0.3);
+  pointer-events: none;
+}
+
+.crosshairH {
+  top: 50%;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.crosshairV {
+  left: 50%;
+  top: 10%;
+  bottom: 10%;
+  width: 1px;
+  transform: translateX(-0.5px);
+}
+
+/* Distance readout — below the scope */
+.distanceLabel {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ec-glow, #84D1DB);
+  text-shadow: 0 0 8px rgba(132, 209, 219, 0.6);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  background: rgba(0, 8, 16, 0.7);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+/* Tracker label — above the scope */
+.label {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--ec-glow, #84D1DB);
+  text-shadow: 0 0 6px rgba(132, 209, 219, 0.5);
+  letter-spacing: 1px;
+}

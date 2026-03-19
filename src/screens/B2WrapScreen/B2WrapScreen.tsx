@@ -28,8 +28,15 @@
  *    - This lets you test the portal overlay without real OSC hardware
  *
  * Controls:
- *   - AGL height slider (right edge)
+ *   - AGL height slider (horizontal, bottom edge — left=LOW, right=HIGH)
+ *   - /trk_4_z_loc OSC address can also drive AGL height (FLAG: range 1–8)
  *   - Coordinate/elevation overlay (bottom center, under North)
+ *
+ * SCOPE OVERLAYS:
+ *   - Trackers now render as circular magnified terrain scopes (not simple portals)
+ *   - Scope size driven by layer_fraction (3rd OSC arg, FLAG: range 0–8)
+ *   - Each scope shows distance-to-terrain at its center bearing
+ *   - Distance is looked up from skyline band data (nearest band with valid data)
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -47,13 +54,15 @@ import {
   type PrebuiltContourStrand, type PeakScreenPos,
   DEG_TO_RAD, EARTH_R, REFRACTION_K, MAX_PEAK_DIST,
   reprojectBands, reprojectRefinedArcs, buildContourStrands,
-  project, getHorizonY,
+  project,
   projectFirstPerson, isPeakVisible,
-  skylineAngleAt, bandAngleAt,
+  skylineAngleAt, bandAngleAt, bandDistAt,
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
 } from '../ScanScreen/scanRendererCore'
-import TrackerPortal from '../../components/TrackerPortal'
+import ScopeOverlay, {
+  SCOPE_LAYER_MIN, SCOPE_LAYER_MAX, SCOPE_SIZE_MIN_PX, SCOPE_SIZE_MAX_PX,
+} from '../../components/ScopeOverlay'
 import TransitionOverlay from '../../components/TransitionOverlay'
 import styles from './B2WrapScreen.module.css'
 
@@ -86,6 +95,53 @@ const WRAP_HEADING = 180
 const WRAP_PITCH   = 0
 const WRAP_HFOV    = 360
 
+// ─── OSC AGL Control ──────────────────────────────────────────────────────────
+// FLAG: Adjust these ranges during testing with real OSC hardware.
+/** Minimum value from /trk_4_z_loc (maps to MIN_HEIGHT_M) */
+const TRK4_Z_MIN = 1
+/** Maximum value from /trk_4_z_loc (maps to MAX_HEIGHT_M) */
+const TRK4_Z_MAX = 8
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Convert a layer_fraction value to scope diameter in pixels */
+function layerFractionToDiameter(layerFraction: number): number {
+  const t = Math.max(0, Math.min(1,
+    (layerFraction - SCOPE_LAYER_MIN) / (SCOPE_LAYER_MAX - SCOPE_LAYER_MIN),
+  ))
+  return SCOPE_SIZE_MIN_PX + t * (SCOPE_SIZE_MAX_PX - SCOPE_SIZE_MIN_PX)
+}
+
+/**
+ * Look up the distance to terrain at a given bearing from skyline band data.
+ * Checks bands from nearest to farthest, returns the first band with valid data.
+ * Returns distance in km, or null if no data.
+ */
+function distanceAtBearing(
+  skyline: SkylineData,
+  bearingDeg: number,
+): number | null {
+  // Check bands from near (index 0) to far
+  for (let bi = 0; bi < skyline.bands.length; bi++) {
+    const dist = bandDistAt(skyline, bi, bearingDeg)
+    if (dist > 0) return dist / 1000 // metres → km
+  }
+  return null
+}
+
+/**
+ * Convert a screen X position on the wrap canvas to a bearing in degrees.
+ * The wrap canvas is a 360° cylindrical projection with South (180°) at center.
+ */
+function screenXToBearing(x: number, containerWidth: number): number {
+  // x=0 → left edge (North, 0°), x=containerWidth → right edge (North, 360°)
+  const fraction = x / containerWidth
+  // Left edge = heading - hfov/2 = 180 - 180 = 0 (North)
+  // Center = 180 (South)
+  // Right edge = heading + hfov/2 = 180 + 180 = 360 (North)
+  return fraction * 360
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const B2WrapScreen: React.FC = () => {
@@ -101,8 +157,8 @@ const B2WrapScreen: React.FC = () => {
   const skylineWorker   = useRef<Worker | null>(null)
   const skylineDataRef  = useRef<SkylineData | null>(null)
   const sliderRef       = useRef<HTMLDivElement>(null)
-  const sliderDragRef   = useRef<{ isDragging: boolean; startY: number; startHeight: number }>({
-    isDragging: false, startY: 0, startHeight: height_m,
+  const sliderDragRef   = useRef<{ isDragging: boolean; startX: number; startHeight: number }>({
+    isDragging: false, startX: 0, startHeight: height_m,
   })
 
   const [skylineData, setSkylineData]               = useState<SkylineData | null>(null)
@@ -117,8 +173,8 @@ const B2WrapScreen: React.FC = () => {
   // Each tracker has x,y (pixel coords) and a visible flag.
   // trk_1_xy_loc → tracker1,  trk_2_xy_loc → tracker2
 
-  const [tracker1, setTracker1] = useState({ x: 0, y: 0, visible: false })
-  const [tracker2, setTracker2] = useState({ x: 0, y: 0, visible: false })
+  const [tracker1, setTracker1] = useState({ x: 0, y: 0, visible: false, diameter: SCOPE_SIZE_MIN_PX })
+  const [tracker2, setTracker2] = useState({ x: 0, y: 0, visible: false, diameter: SCOPE_SIZE_MIN_PX })
 
   // ─── TRANSITION ANIMATION STATE ────────────────────────────────────────
   const [transitionActive, setTransitionActive] = useState(false)
@@ -157,6 +213,23 @@ const B2WrapScreen: React.FC = () => {
   }, [skylineData, refinedArcs, height_m])
 
   const groundElev = skylineData ? skylineData.computedAt.groundElev : 0
+
+  // ── Distance readout for scopes ───────────────────────────────────────────
+  // Convert each tracker's screen X to a bearing, then look up terrain distance.
+
+  const scope1Distance = useMemo<number | null>(() => {
+    if (!skylineData || !tracker1.visible) return null
+    const containerW = containerRef.current?.clientWidth ?? window.innerWidth
+    const bearing = screenXToBearing(tracker1.x, containerW)
+    return distanceAtBearing(skylineData, bearing)
+  }, [skylineData, tracker1.x, tracker1.visible])
+
+  const scope2Distance = useMemo<number | null>(() => {
+    if (!skylineData || !tracker2.visible) return null
+    const containerW = containerRef.current?.clientWidth ?? window.innerWidth
+    const bearing = screenXToBearing(tracker2.x, containerW)
+    return distanceAtBearing(skylineData, bearing)
+  }, [skylineData, tracker2.x, tracker2.visible])
 
   // ── Canvas draw ─────────────────────────────────────────────────────────
 
@@ -404,18 +477,19 @@ const B2WrapScreen: React.FC = () => {
   const handleSliderPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-    sliderDragRef.current = { isDragging: true, startY: e.clientY, startHeight: height_m }
+    sliderDragRef.current = { isDragging: true, startX: e.clientX, startHeight: height_m }
   }, [height_m])
 
   const handleSliderPointerMove = useCallback((e: React.PointerEvent) => {
     if (!sliderDragRef.current.isDragging) return
     const track = sliderRef.current
     if (!track) return
-    const trackHeight = track.getBoundingClientRect().height
-    const deltaY = sliderDragRef.current.startY - e.clientY
+    const trackWidth = track.getBoundingClientRect().width
+    // Horizontal: dragging right = higher
+    const deltaX = e.clientX - sliderDragRef.current.startX
     const range = MAX_HEIGHT_M - MIN_HEIGHT_M
     const newHeight = Math.max(MIN_HEIGHT_M, Math.min(MAX_HEIGHT_M,
-      sliderDragRef.current.startHeight + (deltaY / trackHeight) * range))
+      sliderDragRef.current.startHeight + (deltaX / trackWidth) * range))
     setHeightFromSlider(metersToFeet(newHeight))
   }, [setHeightFromSlider])
 
@@ -465,16 +539,25 @@ const B2WrapScreen: React.FC = () => {
         // Tracker 1: args = [y_norm, x_norm, layer_fraction]
         const xPixel = msg.args[1] * window.innerWidth
         const yPixel = msg.args[0] * window.innerHeight
-        setTracker1({ x: xPixel, y: yPixel, visible: true })
-        console.log(xPixel)
+        const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
+        setTracker1({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
       }
-
 
       if (msg.address === '/trk_2_xy_loc') {
         // Tracker 2: same format as tracker 1
         const xPixel = msg.args[1] * window.innerWidth
         const yPixel = msg.args[0] * window.innerHeight
-        setTracker2({ x: xPixel, y: yPixel, visible: true })
+        const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
+        setTracker2({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+      }
+
+      if (msg.address === '/trk_4_z_loc') {
+        // AGL height control: args = [z_value]
+        // FLAG: Adjust TRK4_Z_MIN / TRK4_Z_MAX during testing with real OSC hardware.
+        const zVal = msg.args[0] ?? TRK4_Z_MIN
+        const t = Math.max(0, Math.min(1, (zVal - TRK4_Z_MIN) / (TRK4_Z_MAX - TRK4_Z_MIN)))
+        const newHeight = MIN_HEIGHT_M + t * (MAX_HEIGHT_M - MIN_HEIGHT_M)
+        setHeightFromSlider(metersToFeet(newHeight))
       }
     })
 
@@ -514,11 +597,13 @@ const B2WrapScreen: React.FC = () => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!simMode) return
       // Convert mouse position to same coords as OSC tracker
-      setTracker1({
+      // In SIM mode, use a mid-range scope diameter
+      setTracker1(prev => ({
         x: e.clientX,
         y: e.clientY,
         visible: true,
-      })
+        diameter: prev.diameter,
+      }))
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -579,11 +664,26 @@ const B2WrapScreen: React.FC = () => {
           }}
         />
 
-        {/* ── TRACKER PORTALS ─────────────────────────────────────────── */}
-        {/* These glowing circles show where motion capture trackers are  */}
-        {/* pointing. In SIM mode, tracker 1 follows your mouse cursor.  */}
-        <TrackerPortal x={tracker1.x} y={tracker1.y} label="1" visible={tracker1.visible} />
-        <TrackerPortal x={tracker2.x} y={tracker2.y} label="2" visible={tracker2.visible} />
+        {/* ── SCOPE OVERLAYS ──────────────────────────────────────────── */}
+        {/* Circular magnified terrain scopes at tracker positions.       */}
+        {/* Size controlled by layer_fraction from OSC data.              */}
+        {/* In SIM mode, scope 1 follows your mouse cursor.              */}
+        <ScopeOverlay
+          x={tracker1.x} y={tracker1.y}
+          visible={tracker1.visible}
+          diameter={tracker1.diameter}
+          canvasRef={canvasRef}
+          distanceKm={scope1Distance}
+          label="1"
+        />
+        <ScopeOverlay
+          x={tracker2.x} y={tracker2.y}
+          visible={tracker2.visible}
+          diameter={tracker2.diameter}
+          canvasRef={canvasRef}
+          distanceKm={scope2Distance}
+          label="2"
+        />
 
         {/* ── PEAK LABELS (HTML overlay) ──────────────────────────────── */}
         {showPeakLabels && peakPositions.length > 0 && (
@@ -622,9 +722,9 @@ const B2WrapScreen: React.FC = () => {
           </div>
         )}
 
-        {/* Height slider */}
+        {/* Height slider — horizontal along the bottom, left=LOW right=HIGH */}
         <div className={styles.heightSlider}>
-          <span className={styles.heightSliderLabel}>HIGH</span>
+          <span className={styles.heightSliderLabel}>LOW</span>
           <div
             ref={sliderRef}
             className={styles.heightSliderTrack}
@@ -640,14 +740,14 @@ const B2WrapScreen: React.FC = () => {
           >
             <div
               className={styles.heightSliderFill}
-              style={{ height: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
+              style={{ width: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
             />
             <div
               className={styles.heightSliderThumb}
-              style={{ bottom: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
+              style={{ left: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
             />
           </div>
-          <span className={styles.heightSliderLabel}>LOW</span>
+          <span className={styles.heightSliderLabel}>HIGH</span>
           <span className={styles.heightSliderValue}>
             {units === 'imperial'
               ? `${Math.round(metersToFeet(height_m))}ft`
