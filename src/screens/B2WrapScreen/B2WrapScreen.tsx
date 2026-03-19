@@ -28,7 +28,7 @@
  *    - This lets you test the portal overlay without real OSC hardware
  *
  * Controls:
- *   - AGL height slider (horizontal, bottom edge — left=LOW, right=HIGH)
+ *   - AGL height slider (vertical, left edge — HIGH at top, LOW at bottom)
  *   - /trk_4_z_loc OSC address can also drive AGL height (FLAG: range 1–8)
  *   - Coordinate/elevation overlay (bottom center, under North)
  *
@@ -157,8 +157,8 @@ const B2WrapScreen: React.FC = () => {
   const skylineWorker   = useRef<Worker | null>(null)
   const skylineDataRef  = useRef<SkylineData | null>(null)
   const sliderRef       = useRef<HTMLDivElement>(null)
-  const sliderDragRef   = useRef<{ isDragging: boolean; startX: number; startHeight: number }>({
-    isDragging: false, startX: 0, startHeight: height_m,
+  const sliderDragRef   = useRef<{ isDragging: boolean; startY: number; startHeight: number }>({
+    isDragging: false, startY: 0, startHeight: height_m,
   })
 
   const [skylineData, setSkylineData]               = useState<SkylineData | null>(null)
@@ -477,19 +477,18 @@ const B2WrapScreen: React.FC = () => {
   const handleSliderPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
-    sliderDragRef.current = { isDragging: true, startX: e.clientX, startHeight: height_m }
+    sliderDragRef.current = { isDragging: true, startY: e.clientY, startHeight: height_m }
   }, [height_m])
 
   const handleSliderPointerMove = useCallback((e: React.PointerEvent) => {
     if (!sliderDragRef.current.isDragging) return
     const track = sliderRef.current
     if (!track) return
-    const trackWidth = track.getBoundingClientRect().width
-    // Horizontal: dragging right = higher
-    const deltaX = e.clientX - sliderDragRef.current.startX
+    const trackHeight = track.getBoundingClientRect().height
+    const deltaY = sliderDragRef.current.startY - e.clientY
     const range = MAX_HEIGHT_M - MIN_HEIGHT_M
     const newHeight = Math.max(MIN_HEIGHT_M, Math.min(MAX_HEIGHT_M,
-      sliderDragRef.current.startHeight + (deltaX / trackWidth) * range))
+      sliderDragRef.current.startHeight + (deltaY / trackHeight) * range))
     setHeightFromSlider(metersToFeet(newHeight))
   }, [setHeightFromSlider])
 
@@ -722,9 +721,9 @@ const B2WrapScreen: React.FC = () => {
           </div>
         )}
 
-        {/* Height slider — horizontal along the bottom, left=LOW right=HIGH */}
+        {/* Height slider — vertical on left edge, HIGH at top, LOW at bottom */}
         <div className={styles.heightSlider}>
-          <span className={styles.heightSliderLabel}>LOW</span>
+          <span className={styles.heightSliderLabel}>HIGH</span>
           <div
             ref={sliderRef}
             className={styles.heightSliderTrack}
@@ -740,14 +739,14 @@ const B2WrapScreen: React.FC = () => {
           >
             <div
               className={styles.heightSliderFill}
-              style={{ width: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
+              style={{ height: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
             />
             <div
               className={styles.heightSliderThumb}
-              style={{ left: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
+              style={{ bottom: `${((height_m - MIN_HEIGHT_M) / (MAX_HEIGHT_M - MIN_HEIGHT_M)) * 100}%` }}
             />
           </div>
-          <span className={styles.heightSliderLabel}>HIGH</span>
+          <span className={styles.heightSliderLabel}>LOW</span>
           <span className={styles.heightSliderValue}>
             {units === 'imperial'
               ? `${Math.round(metersToFeet(height_m))}ft`
