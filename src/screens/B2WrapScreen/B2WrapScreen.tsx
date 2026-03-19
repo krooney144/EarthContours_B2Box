@@ -221,7 +221,9 @@ const B2WrapScreen: React.FC = () => {
     if (!skylineData || !tracker1.visible) return null
     const containerW = containerRef.current?.clientWidth ?? window.innerWidth
     const bearing = screenXToBearing(tracker1.x, containerW)
-    return distanceAtBearing(skylineData, bearing)
+    const dist = distanceAtBearing(skylineData, bearing)
+    console.log('[SCOPE-1] bearing:', bearing.toFixed(1), 'dist:', dist, 'containerW:', containerW, 'x:', tracker1.x)
+    return dist
   }, [skylineData, tracker1.x, tracker1.visible])
 
   const scope2Distance = useMemo<number | null>(() => {
