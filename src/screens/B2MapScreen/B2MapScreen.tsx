@@ -14,22 +14,25 @@
  *   /h2tx            [x_norm 0–1]   — Hand 2 X position (normalised)
  *   /h2ty            [y_norm 0–1]   — Hand 2 Y position (normalised)
  *
- *   /h1:Open_Palm    [1 or 0]       — Hand 1 open palm (idle)
- *   /h1:Closed_Fist  [1 or 0]       — Hand 1 closed fist (pan / pinch-zoom)
- *   /h1:Pointing_Up  [1 or 0]       — Hand 1 pointing (select location)
+ *   /h1:ILoveYou     [confidence 0–1] — Hand 1 grab gesture (pan / pinch-zoom)
+ *   /h1:Pointing_Up  [confidence 0–1] — Hand 1 pointing (preview → release = select)
  *
- *   /h2:Open_Palm    [1 or 0]       — Hand 2 open palm (idle)
- *   /h2:Closed_Fist  [1 or 0]       — Hand 2 closed fist (pan / pinch-zoom)
- *   /h2:Pointing_Up  [1 or 0]       — Hand 2 pointing (select location)
+ *   /h2:ILoveYou     [confidence 0–1] — Hand 2 grab gesture (pan / pinch-zoom)
+ *   /h2:Pointing_Up  [confidence 0–1] — Hand 2 pointing (preview → release = select)
+ *
+ * NOTE: Camera is mounted upside-down (180° flip), so all hand X/Y
+ * coordinates are inverted: xPixel = (1 - x_norm) * screenWidth.
  *
  * ─── GESTURE MEANINGS ───
  *
- *   OPEN PALM  = idle — cursor is visible but does nothing
- *   CLOSED FIST = map interaction:
- *                  • One fist  → pan the map (drag)
- *                  • Two fists → pinch-to-zoom (distance between hands)
- *   POINTING   = instantly selects the location under the hand cursor
- *                (broadcasts to Wrap screen via WebSocket)
+ *   ILoveYou ≥ GRAB_THRESHOLD  = grab — map interaction:
+ *                  • One hand  → pan the map (drag)
+ *                  • Two hands → pinch-to-zoom (distance between hands)
+ *   ILoveYou < GRAB_THRESHOLD  = release — back to idle
+ *
+ *   Pointing ≥ POINT_THRESHOLD = preview — cursor shows where you're aiming
+ *   Pointing < POINT_THRESHOLD = release — selects the location (one-shot)
+ *              5-second cooldown prevents rapid re-triggering.
  *
  * ─── MOUSE SIMULATION (default OFF) ───
  *   Press "M" or click "SIM" button to toggle.
@@ -60,6 +63,20 @@ import type { HandState, HandSide } from '../../components/HandCursor'
 import styles from './B2MapScreen.module.css'
 
 const log = createLogger('SCREEN:B2-MAP')
+
+// ─── GESTURE THRESHOLDS ──────────────────────────────────────────────────────
+// FLAG: Adjust these thresholds during testing with real MediaPipe data.
+// Confidence values from TouchDesigner are 0–1 continuous.
+// Above threshold = gesture active, below = gesture released.
+
+/** ILoveYou confidence threshold for grab (pan/pinch). Raise to require more certainty. */
+const GRAB_THRESHOLD = 0.5
+
+/** Pointing_Up confidence threshold for aim preview. Raise to require more certainty. */
+const POINT_THRESHOLD = 0.5
+
+/** Cooldown in ms after a point-select before another can fire (prevents rapid re-triggers) */
+const POINT_COOLDOWN_MS = 5000
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -102,9 +119,14 @@ const B2MapScreen: React.FC = () => {
   const [simMode, setSimMode] = useState(false)
   const [pulseTrigger, setPulseTrigger] = useState(0)
 
+  // ─── POINT-SELECT COOLDOWN ──────────────────────────────────────────────
+  // Prevents rapid re-triggering of location selection.
+  // After a point-select fires, ignore further triggers for POINT_COOLDOWN_MS.
+  const lastPointSelectTimeRef = useRef<number>(0)
+
   // ─── PINCH-ZOOM TRACKING ────────────────────────────────────────────────
   //
-  // When BOTH hands are closed fists, we track the distance between them.
+  // When BOTH hands are in ILoveYou (grab), we track the distance between them.
   // As that distance changes we zoom the map in or out.
   // `lastPinchDistRef` remembers the previous distance so we can calculate
   // how much it changed each frame.
@@ -124,6 +146,16 @@ const B2MapScreen: React.FC = () => {
   // The location store subscription below then broadcasts it to the Wrap screen.
 
   const handlePointSelect = useCallback((handX: number, handY: number) => {
+    // ── Cooldown guard: ignore if fired too recently ──
+    const now = Date.now()
+    if (now - lastPointSelectTimeRef.current < POINT_COOLDOWN_MS) {
+      log.info('Point-select: cooldown active, ignoring', {
+        remainingMs: POINT_COOLDOWN_MS - (now - lastPointSelectTimeRef.current),
+      })
+      return
+    }
+    lastPointSelectTimeRef.current = now
+
     // Convert pixel position back to normalised 0–1 range
     const xNorm = handX / window.innerWidth
     const yNorm = handY / window.innerHeight
@@ -243,17 +275,17 @@ const B2MapScreen: React.FC = () => {
       console.log('[B2-MAP] OSC IN:', msg.address, msg.args)
 
       // ── Hand 1 position ──────────────────────────────────────────────────
+      // NOTE: Camera is 180° flipped, so we invert: (1 - value)
       if (msg.address === '/h1tx') {
-        const xPixel = msg.args[0] * window.innerWidth
+        const xPixel = (1 - msg.args[0]) * window.innerWidth
         setHand1(prev => {
-          // If fist is active and hand is moving, pan the map
           if (prev.state === 'closed') handleFistGesture(1, xPixel, prev.y)
           return { ...prev, x: xPixel, visible: true }
         })
       }
 
       if (msg.address === '/h1ty') {
-        const yPixel = msg.args[0] * window.innerHeight
+        const yPixel = (1 - msg.args[0]) * window.innerHeight
         setHand1(prev => {
           if (prev.state === 'closed') handleFistGesture(1, prev.x, yPixel)
           return { ...prev, y: yPixel, visible: true }
@@ -261,8 +293,9 @@ const B2MapScreen: React.FC = () => {
       }
 
       // ── Hand 2 position ──────────────────────────────────────────────────
+      // NOTE: Camera is 180° flipped, so we invert: (1 - value)
       if (msg.address === '/h2tx') {
-        const xPixel = msg.args[0] * window.innerWidth
+        const xPixel = (1 - msg.args[0]) * window.innerWidth
         setHand2(prev => {
           if (prev.state === 'closed') handleFistGesture(2, xPixel, prev.y)
           return { ...prev, x: xPixel, visible: true }
@@ -270,59 +303,59 @@ const B2MapScreen: React.FC = () => {
       }
 
       if (msg.address === '/h2ty') {
-        const yPixel = msg.args[0] * window.innerHeight
+        const yPixel = (1 - msg.args[0]) * window.innerHeight
         setHand2(prev => {
           if (prev.state === 'closed') handleFistGesture(2, prev.x, yPixel)
           return { ...prev, y: yPixel, visible: true }
         })
       }
 
-      // ── Hand 1 gesture state ─────────────────────────────────────────────
-      //
-      // Open palm = idle, nothing happens
-      if (msg.address === '/h1:Open_Palm') {
-        lastFistPosRef.current = null // stop pan when fist releases
-        setHand1(prev => ({ ...prev, state: 'open' }))
+      // ── Hand 1 gesture: ILoveYou = grab (pan / pinch-zoom) ─────────────
+      // args[0] is continuous confidence 0–1.
+      // Above GRAB_THRESHOLD = grab active, below = release.
+      // FLAG: Adjust GRAB_THRESHOLD at top of file to tune sensitivity.
+      if (msg.address === '/h1:ILoveYou') {
+        const confidence = msg.args[0] ?? 0
+        const grabActive = confidence >= GRAB_THRESHOLD
+        if (!grabActive) lastFistPosRef.current = null // stop pan on release
+        setHand1(prev => ({ ...prev, state: grabActive ? 'closed' : 'open' }))
       }
 
-      // Closed fist = pan or pinch-zoom (handled in position updates above)
-      if (msg.address === '/h1:Closed_Fist') {
-        const active = msg.args[0] !== 0
-        setHand1(prev => ({ ...prev, state: active ? 'closed' : 'open' }))
-        if (!msg.args[0]) lastFistPosRef.current = null
-      }
-
-      // Pointing = instantly select location under this hand
+      // ── Hand 1 gesture: Pointing_Up = preview → release = select ───────
+      // args[0] is continuous confidence 0–1.
+      // Above POINT_THRESHOLD = "aiming" (preview where you'll select).
+      // Dropping BELOW threshold = "release" → fires the location select.
+      // 5-second cooldown prevents rapid re-triggers.
+      // FLAG: Adjust POINT_THRESHOLD at top of file to tune sensitivity.
       if (msg.address === '/h1:Pointing_Up') {
-        const active = msg.args[0] !== 0
+        const confidence = msg.args[0] ?? 0
+        const pointActive = confidence >= POINT_THRESHOLD
         setHand1(prev => {
-          // Only fire the select on the leading edge (when it becomes active)
-          if (active && prev.state !== 'pointing') {
+          // Fire select on the TRAILING EDGE (was pointing, now released)
+          if (!pointActive && prev.state === 'pointing') {
             handlePointSelect(prev.x, prev.y)
           }
-          return { ...prev, state: active ? 'pointing' : 'open' }
+          return { ...prev, state: pointActive ? 'pointing' : 'open' }
         })
       }
 
-      // ── Hand 2 gesture state ─────────────────────────────────────────────
-      if (msg.address === '/h2:Open_Palm') {
-        lastFistPosRef.current = null
-        setHand2(prev => ({ ...prev, state: 'open' }))
+      // ── Hand 2 gesture: ILoveYou = grab ────────────────────────────────
+      if (msg.address === '/h2:ILoveYou') {
+        const confidence = msg.args[0] ?? 0
+        const grabActive = confidence >= GRAB_THRESHOLD
+        if (!grabActive) lastPinchDistRef.current = null
+        setHand2(prev => ({ ...prev, state: grabActive ? 'closed' : 'open' }))
       }
 
-      if (msg.address === '/h2:Closed_Fist') {
-        const active = msg.args[0] !== 0
-        setHand2(prev => ({ ...prev, state: active ? 'closed' : 'open' }))
-        if (!msg.args[0]) lastPinchDistRef.current = null
-      }
-
+      // ── Hand 2 gesture: Pointing_Up = preview → release = select ──────
       if (msg.address === '/h2:Pointing_Up') {
-        const active = msg.args[0] !== 0
+        const confidence = msg.args[0] ?? 0
+        const pointActive = confidence >= POINT_THRESHOLD
         setHand2(prev => {
-          if (active && prev.state !== 'pointing') {
+          if (!pointActive && prev.state === 'pointing') {
             handlePointSelect(prev.x, prev.y)
           }
-          return { ...prev, state: active ? 'pointing' : 'open' }
+          return { ...prev, state: pointActive ? 'pointing' : 'open' }
         })
       }
     })

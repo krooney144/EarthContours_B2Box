@@ -27,9 +27,10 @@ export const SCOPE_LAYER_MIN = 0
 export const SCOPE_LAYER_MAX = 8
 
 /** Scope diameter in pixels at minimum layer_fraction */
-export const SCOPE_SIZE_MIN_PX = 120
+// FLAG: Adjust these to resize portals. Was 120/400, reduced for exhibit.
+export const SCOPE_SIZE_MIN_PX = 90
 /** Scope diameter in pixels at maximum layer_fraction */
-export const SCOPE_SIZE_MAX_PX = 400
+export const SCOPE_SIZE_MAX_PX = 350
 
 /** Magnification factor for the terrain inside the scope */
 export const SCOPE_ZOOM = 2.0
