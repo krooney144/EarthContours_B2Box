@@ -102,6 +102,9 @@ const TRK4_Z_MIN = 1
 /** Maximum value from /trk_4_z_loc (maps to MAX_HEIGHT_M) */
 const TRK4_Z_MAX = 8
 
+let prevZ = 0
+const Z_Thresh = 0.2
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Convert a layer_fraction value to scope diameter in pixels */
@@ -555,10 +558,17 @@ const B2WrapScreen: React.FC = () => {
       if (msg.address === '/trk_4_z_loc') {
         // AGL height control: args = [z_value]
         // FLAG: Adjust TRK4_Z_MIN / TRK4_Z_MAX during testing with real OSC hardware.
-        const zVal = msg.args[0] ?? TRK4_Z_MIN
+        // if curent vaule - previous vaule > threshold then call set high from slider and set current to slider hight
+        if ( Math.abs(msg.args[0] - prevZ) > Z_Thresh){
+
+                  const zVal = msg.args[0] ?? TRK4_Z_MIN
         const t = Math.max(0, Math.min(1, (zVal - TRK4_Z_MIN) / (TRK4_Z_MAX - TRK4_Z_MIN)))
         const newHeight = MIN_HEIGHT_M + t * (MAX_HEIGHT_M - MIN_HEIGHT_M)
         setHeightFromSlider(metersToFeet(newHeight))
+        prevZ = msg.args[0]
+
+        }
+
       }
     })
 

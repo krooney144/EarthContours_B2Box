@@ -70,13 +70,13 @@ const log = createLogger('SCREEN:B2-MAP')
 // Above threshold = gesture active, below = gesture released.
 
 /** ILoveYou confidence threshold for grab (pan/pinch). Raise to require more certainty. */
-const GRAB_THRESHOLD = 0.5
+const GRAB_THRESHOLD = 0.8
 
 /** Pointing_Up confidence threshold for aim preview. Raise to require more certainty. */
 const POINT_THRESHOLD = 0.5
 
 /** Cooldown in ms after a point-select before another can fire (prevents rapid re-triggers) */
-const POINT_COOLDOWN_MS = 5000
+const POINT_COOLDOWN_MS = 5
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -327,15 +327,15 @@ const B2MapScreen: React.FC = () => {
       // Dropping BELOW threshold = "release" → fires the location select.
       // 5-second cooldown prevents rapid re-triggers.
       // FLAG: Adjust POINT_THRESHOLD at top of file to tune sensitivity.
+      // Pointing = instantly select location under this hand
       if (msg.address === '/h1:Pointing_Up') {
-        const confidence = msg.args[0] ?? 0
-        const pointActive = confidence >= POINT_THRESHOLD
+        const active = msg.args[0] !== 0
         setHand1(prev => {
-          // Fire select on the TRAILING EDGE (was pointing, now released)
-          if (!pointActive && prev.state === 'pointing') {
+          // Only fire the select on the leading edge (when it becomes active)
+          if (active && prev.state !== 'pointing') {
             handlePointSelect(prev.x, prev.y)
           }
-          return { ...prev, state: pointActive ? 'pointing' : 'open' }
+          return { ...prev, state: active ? 'pointing' : 'open' }
         })
       }
 
