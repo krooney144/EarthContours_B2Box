@@ -43,7 +43,7 @@ Then open three browser windows:
                     (hand cursors)        (tracker portals)       (debug)
 ```
 
-**Location sync**: When someone presses SELECT on the Map screen (or does a fist-gesture), it broadcasts `location:update` via WebSocket → the Wrap screen receives it and re-renders the terrain at the new location.
+**Location sync**: When someone releases a pointing gesture on the Map screen (or presses SELECT on a control strip), it broadcasts `location:update` via WebSocket → the Wrap screen receives it and re-renders the terrain at the new location.
 
 **OSC bridge**: The server (`index.cjs`) listens for OSC on UDP port 57121 and forwards every message to all browser windows. Each screen filters for the addresses it cares about.
 
@@ -69,19 +69,33 @@ The **Wrap screen** receives motion capture tracker data and shows glowing porta
 
 The **Map screen** receives MediaPipe hand tracking data and shows hand cursor icons.
 
+**Position** (separate X/Y messages per hand, normalised 0–1):
+
 | OSC Address | Args | What It Does |
 |-------------|------|-------------|
-| `/hand_1_pos` | `[x_norm, y_norm]` | Hand 1 position — cursor appears here |
-| `/hand_2_pos` | `[x_norm, y_norm]` | Hand 2 position — second cursor |
-| `/hand_1_state` | `[state]` | Hand 1 gesture: 0=open palm, 1=closed fist, 2=pointing |
-| `/hand_2_state` | `[state]` | Hand 2 gesture: 0=open, 1=fist, 2=pointing |
+| `/h1tx` | `[x_norm 0–1]` | Hand 1 X position |
+| `/h1ty` | `[y_norm 0–1]` | Hand 1 Y position |
+| `/h2tx` | `[x_norm 0–1]` | Hand 2 X position |
+| `/h2ty` | `[y_norm 0–1]` | Hand 2 Y position |
 
-How the hand states work:
-- **Open palm (0)** = cursor is just hovering/moving around
-- **Closed fist (1)** = "click" action — selects the map center location
-- **Pointing (2)** = directional input
+> **NOTE**: Camera is mounted 180° flipped. The code inverts all coordinates: `(1 - value)`.
 
-> **NOTE**: The OSC addresses above are **placeholders**. When you connect the real MediaPipe system, update them in `src/screens/B2MapScreen/B2MapScreen.tsx` — search for `MEDIAPIPE OSC ADDRESSES`.
+**Gestures** (confidence 0–1, threshold at ~0.5):
+
+| OSC Address | Args | What It Does |
+|-------------|------|-------------|
+| `/h1:ILoveYou` | `[confidence 0–1]` | Hand 1 grab — ≥0.5 = pan/pinch, <0.5 = release |
+| `/h1:Pointing_Up` | `[confidence 0–1]` | Hand 1 point — ≥0.5 = preview, release = select location |
+| `/h2:ILoveYou` | `[confidence 0–1]` | Hand 2 grab — same as hand 1 |
+| `/h2:Pointing_Up` | `[confidence 0–1]` | Hand 2 point — same as hand 1 |
+
+How the gestures work:
+- **ILoveYou ≥ 0.5** = grab — one hand pans, two hands pinch-to-zoom
+- **ILoveYou < 0.5** = release — back to idle
+- **Pointing ≥ 0.5** = preview — cursor shows where you're aiming
+- **Pointing < 0.5** = release — selects the location under the cursor (5s cooldown)
+
+Thresholds are tunable constants at the top of `B2MapScreen.tsx` (`GRAB_THRESHOLD`, `POINT_THRESHOLD`, `POINT_COOLDOWN_MS`).
 
 - **Component**: `src/components/HandCursor/HandCursor.tsx`
 - **Handler**: In `src/screens/B2MapScreen/B2MapScreen.tsx` — search for `socket.on('osc'`
@@ -101,8 +115,8 @@ Both screens have a **SIM toggle button** in the top-right corner:
 
 ### Map screen (SIM mode)
 - Move your mouse → hand cursor (open palm) follows
-- Hold mouse button → cursor switches to closed fist
-- Release mouse button → selects location at crosshair, syncs to Wrap screen
+- Hold left mouse button → cursor switches to grab (pan the map)
+- Right-click → selects location at cursor position, syncs to Wrap screen
 
 ---
 
