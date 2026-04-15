@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showContourLines: true,
   showBandLines: false,           // Depth band ridgeline strokes in SCAN
   showFill: false,                // Terrain fill below ridgelines in SCAN
+  showSilhouetteLines: true,      // Depth-peeled silhouette glow + strokes in SCAN / B2Wrap
   solidTerrain: true,            // Solid terrain mesh in EXPLORE (off = contour lines only)
   contourAnimation: true,       // Slow pulse on by default
   verticalExaggeration: 4,     // 4× default — real mountains visible without being overwhelming
@@ -265,12 +266,13 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: 'earthcontours-settings',      // localStorage key
-      version: 4,                          // bump when persisted shape changes
+      version: 5,                          // bump when persisted shape changes
       /**
        * Migrations:
        * v1→v2: snap old verticalExaggeration values to new set (1|2|4|10|20).
        * v2→v3: replace showRiverLabels + showWaterLabels with showRivers + showLakes + showGlaciers.
        * v3→v4: add showFill (default false), showBandLines default changed to false.
+       * v4→v5: add showSilhouetteLines (default true).
        */
       migrate: (persisted: unknown, fromVersion: number) => {
         const state = persisted as Record<string, unknown>
@@ -287,6 +289,10 @@ export const useSettingsStore = create<SettingsStore>()(
           log.info('Migrating settings v3→v4: add showFill, showBandLines default off')
           if (state.showFill === undefined) state.showFill = false
           if (state.showBandLines === undefined) state.showBandLines = false
+        }
+        if (fromVersion < 5) {
+          log.info('Migrating settings v4→v5: add showSilhouetteLines (default true)')
+          if (state.showSilhouetteLines === undefined) state.showSilhouetteLines = true
         }
         if (fromVersion < 3) {
           log.info('Migrating water settings v2→v3')
@@ -326,6 +332,7 @@ export const useSettingsStore = create<SettingsStore>()(
         showContourLines: state.showContourLines,
         showBandLines: state.showBandLines,
         showFill: state.showFill,
+        showSilhouetteLines: state.showSilhouetteLines,
         solidTerrain: state.solidTerrain,
         contourAnimation: state.contourAnimation,
         verticalExaggeration: state.verticalExaggeration,

@@ -47,11 +47,12 @@ import { createLogger } from '../../core/logger'
 import { MAX_HEIGHT_M, MIN_HEIGHT_M } from '../../core/constants'
 import { formatElevation, metersToFeet, headingToCompass } from '../../core/utils'
 import { fetchPeaksNear } from '../../data/peakLoader'
-import type { Peak, SkylineData, RefinedArc, PeakRefineItem } from '../../core/types'
+import type { Peak, SkylineData, RefinedArc, PeakRefineItem, SilhouetteLayer } from '../../core/types'
 import { DEPTH_BANDS } from '../../core/types'
 import {
   type CameraParams, type ProjectedBands, type ProjectedRefinedArc,
-  type PrebuiltContourStrand, type PeakScreenPos,
+  type PrebuiltContourStrand, type PeakScreenPos, type SilhouetteStrand,
+  type VisibilityEnvelope,
   DEG_TO_RAD, EARTH_R, REFRACTION_K, MAX_PEAK_DIST,
   reprojectBands, reprojectRefinedArcs, buildContourStrands,
   project,
@@ -59,6 +60,9 @@ import {
   skylineAngleAt, bandAngleAt, bandDistAt,
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
+  buildSilhouetteLayers, matchSilhouetteStrands,
+  renderSilhouetteGlow, renderSilhouetteStrokes,
+  buildVisibilityEnvelope,
 } from '../ScanScreen/scanRendererCore'
 import ScopeOverlay, {
   SCOPE_LAYER_MIN, SCOPE_LAYER_MAX, SCOPE_SIZE_MIN_PX, SCOPE_SIZE_MAX_PX,
@@ -152,7 +156,7 @@ const B2WrapScreen: React.FC = () => {
   const { activeLat, activeLng } = useLocationStore()
   const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
   const { peaks } = useTerrainStore()
-  const { units, showBandLines, showFill, showPeakLabels } = useSettingsStore()
+  const { units, showBandLines, showFill, showSilhouetteLines, showPeakLabels } = useSettingsStore()
 
   const canvasRef       = useRef<HTMLCanvasElement>(null)
   const containerRef    = useRef<HTMLDivElement>(null)
@@ -203,17 +207,68 @@ const B2WrapScreen: React.FC = () => {
     return reprojectBands(skylineData, viewerElev)
   }, [skylineData, height_m])
 
+  // Visibility envelope built from the full terrain profile. Used to occlude
+  // contours, refined arc samples, and peaks behind closer terrain.
+  // Recomputes only when skyline data or viewer AGL changes. ~5–10 ms on mobile.
+  const visibilityEnvelope = useMemo<VisibilityEnvelope | null>(() => {
+    const tp = skylineData?.terrainProfile
+    if (!tp) return null
+    const viewerElev = skylineData!.computedAt.groundElev + height_m
+    return buildVisibilityEnvelope(tp, viewerElev)
+  }, [skylineData, height_m])
+
   const contourStrands = useMemo<PrebuiltContourStrand[]>(() => {
     if (!skylineData) return []
     const viewerElev = skylineData.computedAt.groundElev + height_m
-    return buildContourStrands(skylineData, viewerElev)
-  }, [skylineData, height_m])
+    return buildContourStrands(skylineData, viewerElev, visibilityEnvelope)
+  }, [skylineData, height_m, visibilityEnvelope])
 
   const projectedArcs = useMemo<ProjectedRefinedArc[] | null>(() => {
     if (!skylineData || refinedArcs.length === 0) return null
     const viewerElev = skylineData.computedAt.groundElev + height_m
-    return reprojectRefinedArcs(refinedArcs, viewerElev)
-  }, [skylineData, refinedArcs, height_m])
+    return reprojectRefinedArcs(refinedArcs, viewerElev, visibilityEnvelope)
+  }, [skylineData, refinedArcs, height_m, visibilityEnvelope])
+
+  // ── Silhouette layers + strand matching (AGL-dependent, runs on height change)
+  // Front-to-back sweep over AGL-independent candidates. ~75K atan2 calls, sub-ms.
+  const silhouetteLayers = useMemo<SilhouetteLayer[][] | null>(() => {
+    if (!skylineData || !skylineData.silhouette) return null
+    const viewerElev = skylineData.computedAt.groundElev + height_m
+    return buildSilhouetteLayers(skylineData, viewerElev)
+  }, [skylineData, height_m])
+
+  // Strand matching (camera is fixed for B2Wrap, so only layer data matters).
+  const silhouetteStrands = useMemo<SilhouetteStrand[]>(() => {
+    if (!silhouetteLayers || !skylineData?.silhouette) return []
+    const fixedCam: CameraParams = {
+      heading_deg: WRAP_HEADING,
+      pitch_deg:   WRAP_PITCH,
+      hfov:        WRAP_HFOV,
+      W:           WRAP_W,
+      H:           WRAP_H,
+    }
+    return matchSilhouetteStrands(
+      silhouetteLayers,
+      skylineData.silhouette.numAzimuths,
+      skylineData.silhouette.resolution,
+      fixedCam,
+    )
+  }, [silhouetteLayers, skylineData])
+
+  // Silhouette elevation range (for color normalization) — once per layers change.
+  const silElevRange = useMemo<{ min: number; max: number }>(() => {
+    if (!silhouetteLayers) return { min: 0, max: 0 }
+    let min = Infinity, max = -Infinity
+    for (const azLayers of silhouetteLayers) {
+      for (const layer of azLayers) {
+        if (layer.rawElev > 0 && layer.rawElev < min) min = layer.rawElev
+        if (layer.rawElev > max) max = layer.rawElev
+      }
+    }
+    if (min === Infinity) min = 0
+    if (max === -Infinity) max = 0
+    return { min, max }
+  }, [silhouetteLayers])
 
   const groundElev = skylineData ? skylineData.computedAt.groundElev : 0
 
@@ -285,6 +340,14 @@ const B2WrapScreen: React.FC = () => {
       renderContours(ctx, contourStrands, cam, cElevMin, cElevMax, skylineData, projectedBands)
     }
 
+    // 3b. Silhouette glow + edge strokes (drawn on top of contours)
+    // Glow renders first (atmospheric halo), then crisp strokes on top.
+    if (showSilhouetteLines && silhouetteLayers && silhouetteStrands.length > 0 && skylineData?.silhouette) {
+      const silRes = skylineData.silhouette.resolution
+      renderSilhouetteGlow(ctx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
+      renderSilhouetteStrokes(ctx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
+    }
+
     // 4. Horizon glow
     drawHorizonGlow(ctx, cam)
 
@@ -294,7 +357,7 @@ const B2WrapScreen: React.FC = () => {
 
     if (skylineData && showPeakLabels) {
       const visiblePeaks = activePeaks.filter(p =>
-        isPeakVisible(p, activeLat, activeLng, eyeElev, WRAP_HEADING, WRAP_HFOV, skylineData, projectedBands)
+        isPeakVisible(p, activeLat, activeLng, eyeElev, WRAP_HEADING, WRAP_HFOV, skylineData, projectedBands, visibilityEnvelope)
       )
       const topPeaks = visiblePeaks
         .sort((a, b) => b.elevation_m - a.elevation_m)
@@ -351,7 +414,8 @@ const B2WrapScreen: React.FC = () => {
     setPeakPositions(newPositions)
   }, [
     skylineData, projectedBands, contourStrands, projectedArcs,
-    showBandLines, showFill, showPeakLabels,
+    silhouetteLayers, silhouetteStrands, silElevRange, visibilityEnvelope,
+    showBandLines, showFill, showSilhouetteLines, showPeakLabels,
     activeLat, activeLng, height_m, groundElev, activePeaks,
   ])
 

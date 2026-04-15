@@ -9,8 +9,66 @@
  * No React, no stores, no side effects.
  */
 
-import type { SkylineData, SkylineBand, RefinedArc } from '../../core/types'
+import type { SkylineData, SkylineBand, RefinedArc, SilhouetteLayer, TerrainProfile } from '../../core/types'
 import { DEPTH_BANDS } from '../../core/types'
+
+// ─── Visibility Envelope (terrain-profile-based occlusion) ──────────────────
+
+/** Precomputed running-max-angle envelope from the raw terrain profile.
+ *  At each azimuth and distance, stores the maximum elevation-angle ratio
+ *  from all terrain between the viewer and that distance.  Used to determine
+ *  which contour crossings, refined arc samples, and peaks are hidden behind
+ *  closer terrain. */
+export interface VisibilityEnvelope {
+  /** Running max of (effElev − viewerElev) / dist, row-major: ai * numSteps + si. */
+  envelope:     Float32Array
+  /** Distance breakpoints in metres (shared across azimuths). */
+  distances:    Float32Array
+  numSteps:     number
+  numAzimuths:  number
+  resolution:   number
+}
+
+/** Binary search: find largest index where distances[i] <= dist.  Returns -1 if dist < distances[0]. */
+export function profileDistIndex(distances: Float32Array, dist: number): number {
+  let lo = 0, hi = distances.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (distances[mid] <= dist) lo = mid + 1
+    else hi = mid - 1
+  }
+  return hi
+}
+
+/** Build the visibility envelope from the terrain profile at a given viewer elevation.
+ *  Uses ratio comparison instead of atan2 for performance.
+ *  ~2.9M multiply+compare ops for 2880 az × 1000 steps ≈ 5–10 ms on mobile. */
+export function buildVisibilityEnvelope(
+  profile: TerrainProfile,
+  viewerElev: number,
+): VisibilityEnvelope {
+  const { profileData, distances, numSteps, numAzimuths, resolution } = profile
+  const envelope = new Float32Array(numAzimuths * numSteps)
+  for (let ai = 0; ai < numAzimuths; ai++) {
+    let maxRatio = -Infinity
+    const offset = ai * numSteps
+    for (let si = 0; si < numSteps; si++) {
+      const ratio = (profileData[offset + si] - viewerElev) / distances[si]
+      if (ratio > maxRatio) maxRatio = ratio
+      envelope[offset + si] = maxRatio
+    }
+  }
+  return { envelope, distances, numSteps, numAzimuths, resolution }
+}
+
+// ─── Near-peak occlusion tolerance ──────────────────────────────────────────
+// For peaks within NEAR_PEAK_TOL_MAX_M, allow the peak to be up to
+// NEAR_PEAK_TOL_DEG below the envelope's max angle and still count as visible.
+// Handles self-occlusion on convex mountain profiles (false-summit geometry)
+// plus DEM/OSM elevation-source mismatch that dominates at close range.
+const NEAR_PEAK_TOL_DEG    = 3
+const NEAR_PEAK_TOL_MAX_M  = 3_000
+const NEAR_PEAK_TOL_RATIO  = Math.tan(NEAR_PEAK_TOL_DEG * Math.PI / 180)
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -107,6 +165,7 @@ export function reprojectBands(
 export function reprojectRefinedArcs(
   arcs: RefinedArc[],
   viewerElev: number,
+  envelope: VisibilityEnvelope | null = null,
 ): ProjectedRefinedArc[] {
   return arcs.map(arc => {
     const angles = new Float32Array(arc.numSamples)
@@ -118,7 +177,22 @@ export function reprojectRefinedArcs(
         continue
       }
       const curvDrop = (dist * dist) / (2 * EARTH_R) * (1 - REFRACTION_K)
-      angles[i] = Math.atan2(elev - curvDrop - viewerElev, dist)
+      const effElev  = elev - curvDrop
+
+      // Envelope LOS check: hide samples blocked by closer terrain.
+      if (envelope) {
+        const ratio   = (effElev - viewerElev) / dist
+        const bearing = arc.centerBearing + (-arc.halfWidth + i * arc.stepDeg)
+        const normB   = ((bearing % 360) + 360) % 360
+        const envAi   = Math.round(normB * envelope.resolution) % envelope.numAzimuths
+        const si      = profileDistIndex(envelope.distances, dist)
+        if (si >= 0 && ratio < envelope.envelope[envAi * envelope.numSteps + si]) {
+          angles[i] = -Math.PI / 2
+          continue
+        }
+      }
+
+      angles[i] = Math.atan2(effElev - viewerElev, dist)
     }
     return { angles, arc }
   })
@@ -131,6 +205,7 @@ const CONTOUR_INTERVALS_M: number[] = [15.24, 30.48, 60.96, 152.4, 304.8, 609.6]
 export function buildContourStrands(
   skyline: SkylineData,
   viewerElev: number,
+  envelope: VisibilityEnvelope | null = null,
 ): PrebuiltContourStrand[] {
   const completed: PrebuiltContourStrand[] = []
 
@@ -165,14 +240,32 @@ export function buildContourStrands(
         }
         azCrossings.sort((a, b) => a.dist - b.dist)
 
+        // Occlusion policy:
+        //  - envelope provided: profile-based global occlusion (V3 style) — applies
+        //    to ALL bands uniformly, catches cross-band hiding.
+        //  - envelope null: fall back to simple within-azimuth running-max (legacy),
+        //    only active for far bands (bi >= 3) to match prior behavior.
         let runningMaxAngle = -Math.PI / 2
-        const useOcclusion = bi >= 3
+        const useLegacyOcclusion = !envelope && bi >= 3
         for (const c of azCrossings) {
           const curvDrop = (c.dist * c.dist) / (2 * EARTH_R) * (1 - REFRACTION_K)
-          const angle = Math.atan2(c.elev - curvDrop - viewerElev, c.dist)
+          const effElev  = c.elev - curvDrop
+          const angle = Math.atan2(effElev - viewerElev, c.dist)
 
-          if (useOcclusion && angle <= runningMaxAngle) continue
-          if (useOcclusion) runningMaxAngle = angle
+          // Profile-based occlusion (preferred when envelope is available)
+          if (envelope) {
+            const normB = ((bearingDeg % 360) + 360) % 360
+            const envAi = Math.round(normB * envelope.resolution) % envelope.numAzimuths
+            const si = profileDistIndex(envelope.distances, c.dist)
+            if (si >= 0) {
+              const maxRatio = envelope.envelope[envAi * envelope.numSteps + si]
+              const crossingRatio = (effElev - viewerElev) / c.dist
+              if (crossingRatio <= maxRatio) continue  // hidden behind closer terrain
+            }
+          } else if (useLegacyOcclusion) {
+            if (angle <= runningMaxAngle) continue
+            runningMaxAngle = angle
+          }
 
           // Skip ocean / near-sea-level elevation — avoids coastline artifacts
           if (c.elev < OCEAN_ELEV_M) continue
@@ -729,6 +822,7 @@ export function isPeakVisible(
   heading_deg: number, hfov: number,
   skyline: SkylineData,
   projected: ProjectedBands | null,
+  envelope: VisibilityEnvelope | null = null,
 ): boolean {
   const cosLat = Math.cos(viewerLat * DEG_TO_RAD)
   const dx = (peak.lng - viewerLng) * 111_320 * cosLat
@@ -747,6 +841,22 @@ export function isPeakVisible(
   const curvDrop = (dist * dist) / (2 * EARTH_R) * (1 - REFRACTION_K)
   const peakAngle = Math.atan2(peak.elevation_m - curvDrop - viewerElev, dist)
 
+  // Envelope-based occlusion (preferred when available) — V3 style, uniform
+  // across all distances. Uses ratio comparison instead of atan2.
+  if (envelope) {
+    const peakRatio = (peak.elevation_m - curvDrop - viewerElev) / dist
+    const normB = ((bearing % 360) + 360) % 360
+    const envAi = Math.round(normB * envelope.resolution) % envelope.numAzimuths
+    const si    = profileDistIndex(envelope.distances, dist)
+    if (si < 0) return true  // peak closer than first profile step — show it
+    const maxRatio = envelope.envelope[envAi * envelope.numSteps + si]
+    if (dist <= NEAR_PEAK_TOL_MAX_M) {
+      return peakRatio + NEAR_PEAK_TOL_RATIO >= maxRatio
+    }
+    return peakRatio >= maxRatio
+  }
+
+  // Legacy ridge-based occlusion (used when envelope is unavailable)
   const ridgeAngle = skylineAngleAt(skyline, bearing, projected)
   const tolerance = 0.15 * DEG_TO_RAD
 
@@ -822,4 +932,587 @@ export function drawHorizonGlow(
 
   ctx.fillStyle = 'rgba(132, 209, 219, 0.18)'
   ctx.fillRect(0, Math.round(horizonY), W, 1)
+}
+
+// ─── Silhouette Layer Builder ────────────────────────────────────────────────
+
+/**
+ * Compute visible silhouette layers from the worker's packed candidate data.
+ *
+ * For each azimuth, sweeps the candidate list near→far and converts rawElev+dist
+ * into elevation angles at the current viewerElev.  A candidate is visible if its
+ * angle exceeds the running maximum from all nearer terrain.
+ *
+ * Returns SilhouetteLayers[azimuthIdx][layerIdx] — layers sorted near→far within
+ * each azimuth.  Typically 2–12 layers per azimuth in mountainous terrain.
+ *
+ * Cost: ~26 candidates × 2880 azimuths = ~75K atan2 calls.  Sub-millisecond.
+ */
+export function buildSilhouetteLayers(
+  skyline: SkylineData,
+  viewerElev: number,
+): SilhouetteLayer[][] | null {
+  const sil = skyline.silhouette
+  if (!sil || !sil.candidateData || sil.candidateData.length === 0) return null
+
+  const { candidateData, candidateOffsets, numAzimuths } = sil
+  const FPC = 8  // floats per candidate (SILHOUETTE_FLOATS_PER_CANDIDATE)
+  const result: SilhouetteLayer[][] = new Array(numAzimuths)
+
+  for (let ai = 0; ai < numAzimuths; ai++) {
+    const start = candidateOffsets[ai]
+    const end   = candidateOffsets[ai + 1]
+
+    if (start >= end) {
+      result[ai] = []
+      continue
+    }
+
+    const layers: SilhouetteLayer[] = []
+    let maxAngle = -Math.PI / 2
+
+    // Candidates are sorted near→far by distance
+    for (let off = start; off < end; off += FPC) {
+      const effElev     = candidateData[off]
+      const rawElev     = candidateData[off + 1]
+      const dist        = candidateData[off + 2]
+      const lat         = candidateData[off + 3]
+      const lng         = candidateData[off + 4]
+      const baseEffElev = candidateData[off + 5]
+      const baseDist    = candidateData[off + 6]
+      const flags       = candidateData[off + 7]
+
+      const peakAngle = Math.atan2(effElev - viewerElev, dist)
+      const isOcean   = (flags & 1) !== 0
+
+      // Skip ocean candidates — no terrain fill for ocean
+      if (isOcean) continue
+
+      // Visible only if this candidate peeks above all nearer terrain
+      if (peakAngle > maxAngle) {
+        // Base angle: either the valley floor angle or the current running max
+        // (whichever is higher — we can't see below the running max)
+        const rawBaseAngle = baseDist > 0
+          ? Math.atan2(baseEffElev - viewerElev, baseDist)
+          : -Math.PI / 2
+        const baseAngle = Math.max(rawBaseAngle, maxAngle)
+
+        layers.push({
+          peakAngle,
+          baseAngle,
+          rawElev,
+          dist,
+          lat,
+          lng,
+          effElev,
+          baseEffElev,
+          isOcean,
+        })
+
+        maxAngle = peakAngle
+      }
+    }
+
+    result[ai] = layers
+  }
+
+  return result
+}
+
+// ─── Silhouette Layer Matching (connect layers across azimuths into strands) ─
+
+/** A matched silhouette strand: a continuous silhouette edge across azimuths.
+ *  Built by matching layers at adjacent azimuths by distance proximity. */
+export interface SilhouetteStrand {
+  /** Per-azimuth data for this strand, indexed by screen column position.
+   *  Each entry has the azimuth index and the layer from that azimuth. */
+  segments: Array<{ ai: number; layer: SilhouetteLayer }>
+  /** Average distance of this strand (for depth-based styling) */
+  avgDist: number
+}
+
+/**
+ * Match silhouette layers across adjacent azimuths into continuous strands.
+ * Primary match key: distance proximity — a silhouette line represents terrain
+ * at a specific distance from the viewer. Two adjacent azimuth samples belong
+ * to the same strand only if they're at approximately the same distance.
+ * Minimum peakAngle filter: skip layers whose angle is too low — near-flat
+ * ridgelines aren't meaningful silhouettes and clutter the view.
+ * Returns strands sorted far→near (for painter's order fill rendering).
+ */
+export function matchSilhouetteStrands(
+  layers: SilhouetteLayer[][],
+  numAzimuths: number,
+  resolution: number,
+  cam: CameraParams,
+): SilhouetteStrand[] {
+  const { heading_deg, hfov } = cam
+
+  // Minimum peakAngle — fixed relative to horizon. AGL is already baked into
+  // peakAngle by buildSilhouetteLayers (atan2(effElev - viewerElev, dist)).
+  // Camera pitch only affects where on screen things are drawn, not whether
+  // silhouette lines exist. Same mountain at same AGL = same silhouettes.
+  const MIN_PEAK_ANGLE = -0.30  // ~-17° below horizon
+
+  // Determine visible azimuth range.
+  // Special case for full-panorama views (hfov >= 360): sweep all azimuths.
+  // Without this, hfov=360 collapses to aiStart==aiEnd==0 and we'd visit 1 azimuth.
+  const isFullPanorama = hfov >= 359.999
+  const bearingStart = heading_deg - hfov * 0.5
+  const bearingEnd   = heading_deg + hfov * 0.5
+
+  const aiStart = isFullPanorama
+    ? 0
+    : Math.floor(((bearingStart % 360 + 360) % 360) * resolution)
+  const aiEnd = isFullPanorama
+    ? numAzimuths - 1
+    : Math.ceil(((bearingEnd % 360 + 360) % 360) * resolution)
+
+  // Active strands being built
+  interface ActiveStrand {
+    segments: Array<{ ai: number; layer: SilhouetteLayer }>
+    lastAi:   number
+    lastDist: number
+    distSum:  number
+  }
+  const active: ActiveStrand[] = []
+  const completed: SilhouetteStrand[] = []
+
+  const MAX_AZ_GAP = Math.ceil(resolution * 4)  // Max 4° gap before expiring
+
+  // Sweep through visible azimuths
+  const totalVisible = isFullPanorama
+    ? numAzimuths
+    : (aiEnd >= aiStart
+        ? aiEnd - aiStart + 1
+        : (numAzimuths - aiStart) + aiEnd + 1)
+
+  for (let step = 0; step < totalVisible; step++) {
+    const ai = (aiStart + step) % numAzimuths
+    const azLayers = layers[ai]
+    if (!azLayers || azLayers.length === 0) continue
+
+    const matched = new Set<number>()  // indices into active that got matched
+
+    for (const layer of azLayers) {
+      // Skip layers below minimum angle — not meaningful silhouettes
+      if (layer.peakAngle < MIN_PEAK_ANGLE) continue
+
+      // Find closest active strand by distance — primary match key.
+      // A real ridgeline varies ±10-15% in distance across its bearing span
+      // (cosine effect of a ridge curving away). Tighter tolerance prevents
+      // connecting candidates from different ridges at different depths.
+      let bestIdx = -1
+      let bestDiff = Infinity
+      const distTol = layer.dist < 10_000
+        ? Math.max(200, layer.dist * 0.12)   // near: 12%, floor 200m
+        : layer.dist < 50_000
+        ? Math.max(500, layer.dist * 0.15)   // mid: 15%, floor 500m
+        : Math.max(1000, layer.dist * 0.18)  // far: 18%, floor 1km
+
+      for (let si = 0; si < active.length; si++) {
+        if (matched.has(si)) continue
+        const s = active[si]
+        // Check azimuth gap
+        const azGap = ai >= s.lastAi ? ai - s.lastAi : (numAzimuths - s.lastAi + ai)
+        if (azGap > MAX_AZ_GAP) continue
+
+        const diff = Math.abs(layer.dist - s.lastDist)
+        if (diff < bestDiff && diff < distTol) {
+          bestIdx = si
+          bestDiff = diff
+        }
+      }
+
+      if (bestIdx >= 0) {
+        // Extend existing strand
+        active[bestIdx].segments.push({ ai, layer })
+        active[bestIdx].lastAi   = ai
+        active[bestIdx].lastDist = layer.dist
+        active[bestIdx].distSum += layer.dist
+        matched.add(bestIdx)
+      } else {
+        // Start new strand
+        active.push({
+          segments: [{ ai, layer }],
+          lastAi:   ai,
+          lastDist: layer.dist,
+          distSum:  layer.dist,
+        })
+      }
+    }
+
+    // Expire old strands (check periodically)
+    if (step % MAX_AZ_GAP === 0) {
+      for (let si = active.length - 1; si >= 0; si--) {
+        const s = active[si]
+        const azGap = ai >= s.lastAi ? ai - s.lastAi : (numAzimuths - s.lastAi + ai)
+        if (azGap > MAX_AZ_GAP) {
+          if (s.segments.length >= 3) {
+            completed.push({
+              segments: s.segments,
+              avgDist:  s.distSum / s.segments.length,
+            })
+          }
+          active.splice(si, 1)
+        }
+      }
+    }
+  }
+
+  // Flush remaining active strands
+  for (const s of active) {
+    if (s.segments.length >= 3) {
+      completed.push({
+        segments: s.segments,
+        avgDist:  s.distSum / s.segments.length,
+      })
+    }
+  }
+
+  // Sort far→near for painter's order (far drawn first, near on top)
+  completed.sort((a, b) => b.avgDist - a.avgDist)
+
+  return completed
+}
+
+// ─── Silhouette Renderers (glow + strokes) ───────────────────────────────────
+
+const GLOW_MAX_ALPHA    = 0.55  // max glow opacity at peak prominence + near + high angle
+const GLOW_DIST_FLOOR   = 0.06  // even the farthest ridge gets a small glow floor
+const GLOW_ANGLE_ZERO   = -0.30 // rad — matches MIN_PEAK_ANGLE; all visible silhouette terrain gets glow
+const GLOW_ANGLE_FULL   = 0.10  // rad — glow reaches full intensity above this angle
+const GLOW_PROMINENCE_SCALE = 150 // metres — ridge this far above its valley = full tProminence
+
+/**
+ * Render soft atmospheric glow behind silhouette strands.
+ *
+ * Three gaussian-like passes at decreasing width/increasing alpha create a halo
+ * that sits BEHIND the crisp strokes.  Brightness scales with:
+ *   - Angle: high ridgelines glow strong, flat terrain near threshold = zero
+ *   - Distance: near = intense tight glow, far = subtle soft whisper
+ *   - Prominence (effElev - baseEffElev): 0.5–1.0 boost multiplier
+ *
+ * Called BEFORE renderSilhouetteStrokes so the crisp line draws on top.
+ */
+export function renderSilhouetteGlow(
+  ctx: CanvasRenderingContext2D,
+  strands: SilhouetteStrand[],
+  cam: CameraParams,
+  globalElevMin: number,
+  globalElevMax: number,
+  silResolution: number,
+): void {
+  const { H } = cam
+  const elevRange = globalElevMax - globalElevMin
+  const hasElevRange = elevRange > 1
+  const maxDist = 400_000
+  const MIN_PEAK_ANGLE = -0.30
+  const MAX_ANGLE_JUMP = 0.005
+  const MIN_STRAND_SEGS = 8
+  const numAzimuths = silResolution * 360
+  const MAX_AZ_GAP = 4
+
+  ctx.save()
+  ctx.lineCap  = 'round'
+  ctx.lineJoin = 'round'
+
+  for (let si = 0; si < strands.length; si++) {
+    const strand = strands[si]
+    const segs = strand.segments
+    if (segs.length < MIN_STRAND_SEGS) continue
+
+    const distT = Math.sqrt(Math.min(1, strand.avgDist / maxDist))
+    const tDistGlow = GLOW_DIST_FLOOR + (1 - GLOW_DIST_FLOOR) * (1 - distT)
+
+    // Strand-level base width (midpoint of near/far range — glow is atmospheric,
+    // doesn't need curvature tapering)
+    const maxWidth = 1.5 + (1 - distT) * 3.5
+    const minWidth = 0.4 + (1 - distT) * 1.6
+    const baseGlowWidth = (minWidth + maxWidth) * 0.5
+
+    // Strand-level color from average elevation
+    const avgElev = segs.reduce((s, seg) => s + seg.layer.rawElev, 0) / segs.length
+    const tElev = hasElevRange
+      ? Math.max(0, Math.min(1, (avgElev - globalElevMin) / elevRange)) : 0.5
+    const baseColor = elevToRidgeColor(tElev)
+    const rgbMatch = baseColor.match(/\d+/g)
+    const gr = rgbMatch ? Math.min(255, Math.round(parseInt(rgbMatch[0]) * 0.9 + 40)) : 140
+    const gg = rgbMatch ? Math.min(255, Math.round(parseInt(rgbMatch[1]) * 0.9 + 30)) : 190
+    const gb = rgbMatch ? Math.min(255, Math.round(parseInt(rgbMatch[2]) * 0.95 + 50)) : 220
+
+    // Strand-level tGlow from average peakAngle + average prominence
+    const avgPeakAngle = segs.reduce((s, seg) => s + seg.layer.peakAngle, 0) / segs.length
+    let promSum = 0
+    for (const seg of segs) {
+      const hasBase = Math.abs(seg.layer.baseAngle - (-Math.PI / 2)) > 0.01
+      promSum += hasBase
+        ? Math.max(0, seg.layer.effElev - seg.layer.baseEffElev)
+        : GLOW_PROMINENCE_SCALE
+    }
+    const avgProm = promSum / segs.length
+    const tProminence = Math.min(1, Math.max(0, avgProm / GLOW_PROMINENCE_SCALE))
+    // Ease-out power curve: steep rise from threshold, gentle plateau toward full.
+    // At -0.30 rad: 0.44 glow.  At -0.20 rad: 0.87.  At -0.10 rad: 0.98.
+    const tLinear = Math.max(0, Math.min(1,
+      (avgPeakAngle - GLOW_ANGLE_ZERO) / (GLOW_ANGLE_FULL - GLOW_ANGLE_ZERO)))
+    const tAngle = 1 - Math.pow(1 - tLinear, 5)
+    const tGlow = tAngle * tDistGlow * (0.5 + 0.5 * tProminence)
+
+    if (tGlow < 0.01) continue
+
+    const glowAlpha = tGlow * GLOW_MAX_ALPHA
+
+    // Asymmetric Y offset: sky (up) gets tight bright passes, terrain (down) gets diffused bleed.
+    // Scales with distance so offset is proportional at all depths.
+    const baseOffset = 2 + (1 - distT) * 2  // near: 4px, far: 2px
+
+    // Glow passes: drawn wide→narrow so narrower overlays wider.
+    // Y offset: negative = sky (up), positive = terrain (down).
+    const passes = [
+      { widthMul: 6,   alphaMul: 0.10, yOff: +baseOffset },        // terrain bleed (wide, dim, down)
+      { widthMul: 3,   alphaMul: 0.22, yOff: -baseOffset * 0.7 },  // sky halo (medium, brighter, up)
+      { widthMul: 1.5, alphaMul: 0.45, yOff: -baseOffset * 0.3 },  // sky core (tight, brightest, slight up)
+    ]
+
+    // Build runs (same azimuth-gap logic as strokes)
+    const runs: Array<{ start: number; end: number }> = []
+    let runStart = 0
+    for (let i = 1; i < segs.length; i++) {
+      const prevAi = segs[i - 1].ai
+      const currAi = segs[i].ai
+      const gap = currAi >= prevAi ? currAi - prevAi : (numAzimuths - prevAi + currAi)
+      if (gap > MAX_AZ_GAP) {
+        if (i - runStart >= 3) runs.push({ start: runStart, end: i })
+        runStart = i
+      }
+    }
+    if (segs.length - runStart >= 3) runs.push({ start: runStart, end: segs.length })
+
+    for (const run of runs) {
+      // Project points — angle continuity check keeps the path smooth
+      const projected: Array<{ x: number; y: number }> = []
+      let prevPeakAngle = -999
+
+      for (let i = run.start; i < run.end; i++) {
+        const { ai, layer } = segs[i]
+        if (layer.peakAngle < MIN_PEAK_ANGLE) {
+          projected.push({ x: 0, y: -9999 })
+          prevPeakAngle = -999
+          continue
+        }
+        if (prevPeakAngle > -999 && Math.abs(layer.peakAngle - prevPeakAngle) > MAX_ANGLE_JUMP) {
+          projected.push({ x: 0, y: -9999 })
+          prevPeakAngle = layer.peakAngle
+          continue
+        }
+        const bearing = ai / silResolution
+        const pos = project(bearing, layer.peakAngle, cam)
+        if (pos.y >= H) {
+          projected.push({ x: pos.x, y: -9999 })
+        } else {
+          projected.push({ x: pos.x, y: Math.max(0, Math.min(H, pos.y)) })
+        }
+        prevPeakAngle = layer.peakAngle
+      }
+
+      // Draw 3 glow passes over the same projected path
+      for (const pass of passes) {
+        const passWidth = baseGlowWidth * pass.widthMul
+        const passAlpha = glowAlpha * pass.alphaMul
+
+        ctx.lineWidth = passWidth
+        ctx.strokeStyle = `rgba(${gr},${gg},${gb},${passAlpha.toFixed(3)})`
+        ctx.beginPath()
+        let started = false
+
+        for (let j = 0; j < projected.length; j++) {
+          const pt = projected[j]
+          if (pt.y < -9000) {
+            if (started) { ctx.stroke(); ctx.beginPath(); started = false }
+            continue
+          }
+
+          const yShifted = pt.y + pass.yOff
+
+          if (!started) {
+            ctx.moveTo(pt.x, yShifted)
+            started = true
+          } else if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+            const next = projected[j + 1]
+            ctx.quadraticCurveTo(pt.x, yShifted, (pt.x + next.x) / 2, (yShifted + next.y + pass.yOff) / 2)
+          } else {
+            ctx.lineTo(pt.x, yShifted)
+          }
+        }
+        if (started) ctx.stroke()
+      }
+    }
+  }
+
+  ctx.restore()
+}
+
+/**
+ * Render silhouette edge strokes only.
+ *
+ * Silhouette FILLS are not ported — see V3 comment:
+ * "Silhouette pre-bucketing removed — band fill polygons provide full coverage.
+ *  Silhouette layer fills are no longer needed (were the largest per-frame cost)."
+ * This function draws only the edge strokes on top of everything.
+ * Strokes use strand matching for continuous lines across azimuths.
+ */
+export function renderSilhouetteStrokes(
+  ctx: CanvasRenderingContext2D,
+  strands: SilhouetteStrand[],
+  cam: CameraParams,
+  globalElevMin: number,
+  globalElevMax: number,
+  silResolution: number,
+): void {
+  const { H } = cam
+  const elevRange = globalElevMax - globalElevMin
+  const hasElevRange = elevRange > 1
+  const maxDist = 400_000
+  const numAzimuths = silResolution * 360
+
+  // ── Silhouette edge strokes (strand-based for smooth lines) ────
+  // Only draw strokes for strands with enough segments.
+  // Use curvature-based line tapering for natural appearance.
+
+  const MIN_STRAND_SEGS = 8   // Eliminate short dash artifacts — 8 segs = 1° bearing
+  const MAX_AZ_GAP_FOR_STROKE = 4  // Match the matching gap tolerance
+  // Fixed min angle — AGL already baked into peakAngle, pitch is viewport only
+  const MIN_PEAK_ANGLE = -0.30  // ~-17° below horizon
+
+  for (const strand of strands) {
+    const segs = strand.segments
+    if (segs.length < MIN_STRAND_SEGS) continue
+
+    // Sqrt distance scaling — spreads the 0-100km range across more of 0-1,
+    // giving much better near/far width separation. Linear was compressing
+    // everything under 100km into distT < 0.25.
+    const distT = Math.sqrt(Math.min(1, strand.avgDist / maxDist))
+    // 1km→0.05, 5km→0.11, 30km→0.27, 100km→0.50, 400km→1.0
+
+    const angles: number[] = segs.map(s => s.layer.peakAngle)
+    const baseOpacity = 0.25 + (1 - distT) * 0.55    // near: 0.80, far: 0.25
+    const maxWidth    = 1.5 + (1 - distT) * 3.5       // near: 5.0px, far: 1.5px
+    const minWidth    = 0.4 + (1 - distT) * 1.6       // near: 2.0px, far: 0.4px
+    const CURVATURE_THRESHOLD = 0.008
+
+    ctx.lineCap  = 'round'
+    ctx.lineJoin = 'round'
+
+    // Break into contiguous runs
+    const runs: Array<{ start: number; end: number }> = []
+    let runStart = 0
+    for (let i = 1; i < segs.length; i++) {
+      const prevAi = segs[i - 1].ai
+      const currAi = segs[i].ai
+      const gap = currAi >= prevAi
+        ? currAi - prevAi
+        : (numAzimuths - prevAi + currAi)
+      if (gap > MAX_AZ_GAP_FOR_STROKE) {
+        if (i - runStart >= 3) runs.push({ start: runStart, end: i })
+        runStart = i
+      }
+    }
+    if (segs.length - runStart >= 3) runs.push({ start: runStart, end: segs.length })
+
+    for (const run of runs) {
+      // Pre-project all points in this run, filtering out low-angle segments
+      // and marking angle discontinuities as path breaks
+      const MAX_ANGLE_JUMP = 0.005  // rad — max natural peakAngle change per 0.125° azimuth step
+      interface SilPt { x: number; y: number; rawElev: number; curvature: number }
+      const projected: SilPt[] = []
+      let prevPeakAngle = -999  // sentinel for first point
+
+      for (let i = run.start; i < run.end; i++) {
+        const { ai, layer } = segs[i]
+        // Skip segments below minimum angle
+        if (layer.peakAngle < MIN_PEAK_ANGLE) {
+          projected.push({ x: 0, y: -9999, rawElev: 0, curvature: 0 })
+          prevPeakAngle = -999
+          continue
+        }
+
+        // Angle continuity check — break path if peakAngle jumps too much
+        // between adjacent strand segments. This catches cross-ridge mismatches
+        // that slipped through distance-based matching. AGL-stable because
+        // peakAngle already encodes viewer elevation.
+        if (prevPeakAngle > -999 && Math.abs(layer.peakAngle - prevPeakAngle) > MAX_ANGLE_JUMP) {
+          projected.push({ x: 0, y: -9999, rawElev: 0, curvature: 0 })
+          prevPeakAngle = layer.peakAngle  // reset for next segment
+          continue
+        }
+
+        const bearing = ai / silResolution
+        const pos = project(bearing, layer.peakAngle, cam)
+        const clampedY = Math.max(0, Math.min(H, pos.y))
+        let curvature = 0
+        if (i > run.start && i < run.end - 1) {
+          curvature = Math.abs(angles[i + 1] - 2 * angles[i] + angles[i - 1])
+        }
+        if (pos.y >= H) {
+          projected.push({ x: pos.x, y: -9999, rawElev: 0, curvature: 0 })
+        } else {
+          projected.push({ x: pos.x, y: clampedY, rawElev: layer.rawElev, curvature })
+        }
+        prevPeakAngle = layer.peakAngle
+      }
+
+      // Draw smooth curves through valid points
+      let pathStarted = false
+      const SEG_SIZE = 8  // Update color/width every 8 points
+
+      for (let j = 0; j < projected.length; j++) {
+        const pt = projected[j]
+        if (pt.y < -9000) {
+          if (pathStarted) { ctx.stroke(); pathStarted = false }
+          continue
+        }
+
+        if (!pathStarted) {
+          const tElev = hasElevRange && pt.rawElev > 0
+            ? Math.max(0, Math.min(1, (pt.rawElev - globalElevMin) / elevRange)) : 0.5
+          const tCurvature = Math.min(1, pt.curvature / CURVATURE_THRESHOLD)
+          const lineWidth = minWidth + (maxWidth - minWidth) * (0.2 + 0.8 * tCurvature)
+          ctx.beginPath()
+          ctx.lineWidth = lineWidth
+          ctx.globalAlpha = baseOpacity
+          ctx.strokeStyle = elevToRidgeColor(tElev)
+          ctx.moveTo(pt.x, pt.y)
+          pathStarted = true
+        } else if (j % SEG_SIZE === 0) {
+          // Flush and update style
+          ctx.stroke()
+          const tElev = hasElevRange && pt.rawElev > 0
+            ? Math.max(0, Math.min(1, (pt.rawElev - globalElevMin) / elevRange)) : 0.5
+          const tCurvature = Math.min(1, pt.curvature / CURVATURE_THRESHOLD)
+          const lineWidth = minWidth + (maxWidth - minWidth) * (0.2 + 0.8 * tCurvature)
+          ctx.beginPath()
+          ctx.lineWidth = lineWidth
+          ctx.strokeStyle = elevToRidgeColor(tElev)
+          ctx.moveTo(projected[j - 1].x, projected[j - 1].y)
+          // quadraticCurveTo to this point via midpoint
+          if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+            const next = projected[j + 1]
+            ctx.quadraticCurveTo(pt.x, pt.y, (pt.x + next.x) / 2, (pt.y + next.y) / 2)
+          } else {
+            ctx.lineTo(pt.x, pt.y)
+          }
+        } else if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+          // Smooth curve: control=current, end=midpoint to next
+          const next = projected[j + 1]
+          ctx.quadraticCurveTo(pt.x, pt.y, (pt.x + next.x) / 2, (pt.y + next.y) / 2)
+        } else {
+          // Last valid point or next is invalid: line to exact position
+          ctx.lineTo(pt.x, pt.y)
+        }
+      }
+      if (pathStarted) ctx.stroke()
+    }
+    ctx.globalAlpha = 1.0
+  }
 }

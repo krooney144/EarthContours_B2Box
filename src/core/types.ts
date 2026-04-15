@@ -222,6 +222,7 @@ export interface AppSettings {
   showContourLines: boolean
   showBandLines: boolean
   showFill: boolean
+  showSilhouetteLines: boolean
   solidTerrain: boolean
   contourAnimation: boolean
   verticalExaggeration: VerticalExaggeration
@@ -404,6 +405,159 @@ export interface PeakRefineItem {
   name: string
 }
 
+// ─── SCAN — Silhouette System (Depth-Peeled Terrain Layers) ──────────────────
+
+/**
+ * Distance bins for the silhouette system.  Log-spaced to match visual importance:
+ * dense bins where terrain detail matters (near), sparse where it doesn't (far).
+ *
+ * Each bin stores up to `maxCandidates` local-maximum terrain points per azimuth.
+ * This shared constant is the SINGLE source of truth — the worker, renderer,
+ * and future feature renderers (rivers, lakes) all import it.
+ *
+ * Format: [minDist_m, maxDist_m, maxCandidates]
+ */
+export const DISTANCE_BINS: readonly [number, number, number][] = [
+  [0,        1_000,   5],   // Bin 0: ultra-near cliffs/hills
+  [1_000,    5_000,   5],   // Bin 1: near valleys/ridges
+  [5_000,   15_000,   5],   // Bin 2: mid-near ranges
+  [15_000,  40_000,   4],   // Bin 3: mid-range peaks
+  [40_000, 100_000,   3],   // Bin 4: far ridges
+  [100_000, 250_000,  2],   // Bin 5: distant ranges
+  [250_000, 400_000,  2],   // Bin 6: horizon features
+] as const
+
+/** Total max candidates per azimuth across all bins. */
+export const MAX_SILHOUETTE_CANDIDATES = DISTANCE_BINS.reduce((s, b) => s + b[2], 0)  // 26
+
+/** Number of floats stored per silhouette candidate in the packed array.
+ *  [effElev, rawElev, dist, lat, lng, baseEffElev, baseDist, flags]
+ *  flags: bit 0 = isOcean (rawElev≈0 on ocean tile). Remaining bits reserved. */
+export const SILHOUETTE_FLOATS_PER_CANDIDATE = 8
+
+/**
+ * Packed silhouette data for one depth range.
+ * The worker stores local elevation maxima (hilltops/ridgetops) along each
+ * azimuth ray, grouped into distance bins.  At render time the main thread
+ * does a front-to-back sweep with atan2 at the current AGL to determine
+ * which candidates are actually visible silhouette edges.
+ *
+ * Storage is AGL-independent: effElev = rawElev − curvDrop doesn't change
+ * when the viewer goes up/down.  Angles are computed on the main thread.
+ */
+export interface SilhouetteData {
+  /** Packed candidate array.  Each candidate = SILHOUETTE_FLOATS_PER_CANDIDATE floats:
+   *  [effElev, rawElev, dist, lat, lng, baseEffElev, baseDist, flags].
+   *  All azimuths concatenated — use silhouetteOffsets to index. */
+  candidateData: Float32Array
+  /** Per-azimuth offset into candidateData (length = numAzimuths + 1).
+   *  Azimuth ai's candidates start at silhouetteOffsets[ai] and end before
+   *  silhouetteOffsets[ai+1].  Candidates within each azimuth are sorted
+   *  near-to-far by distance. */
+  candidateOffsets: Uint32Array
+  /** Azimuth resolution for this silhouette data (steps per degree). */
+  resolution: number
+  /** Number of azimuth samples = 360 × resolution. */
+  numAzimuths: number
+}
+
+/** A single visible silhouette layer at one azimuth, computed at render time.
+ *  Produced by the front-to-back sweep in buildSilhouetteLayers(). */
+export interface SilhouetteLayer {
+  /** Elevation angle of this layer's peak (radians) — top of fill, where stroke goes */
+  peakAngle: number
+  /** Elevation angle of this layer's base (radians) — bottom of fill */
+  baseAngle: number
+  /** Raw ground elevation at the peak point (metres) — for color mapping */
+  rawElev: number
+  /** Distance to the peak point (metres) — for line weight / atmospheric fade */
+  dist: number
+  /** GPS of the peak point — for feature attachment */
+  lat: number
+  lng: number
+  /** Effective elevation (rawElev - curvDrop) — for re-use */
+  effElev: number
+  /** Effective elevation of the valley floor below this layer (metres).
+   *  Used for elevation-based prominence: effElev - baseEffElev = how much ridge stands above valley. */
+  baseEffElev: number
+  /** Is this candidate over ocean? */
+  isOcean: boolean
+}
+
+/** Per-azimuth array of visible silhouette layers.
+ *  Computed on the main thread from SilhouetteData whenever AGL changes. */
+export type SilhouetteLayers = SilhouetteLayer[][]  // [azimuthIdx][layerIdx near→far]
+
+// ─── SCAN — Near-Field Occlusion Profile ─────────────────────────────────────
+
+/** Number of distance samples per azimuth for the near-field occlusion profile.
+ *  50 samples from 20m to 2km gives ~40m average spacing — sufficient for
+ *  opaque terrain surface rendering without excessive memory/compute. */
+export const NEAR_PROFILE_SAMPLES = 50
+
+/** Maximum distance (metres) for the near-field profile. */
+export const NEAR_PROFILE_MAX_DIST = 2000
+
+/** AGL threshold (metres) below which near-field occlusion is active.
+ *  Above ~60m (200ft) the bird's-eye view makes occlusion unnecessary. */
+export const NEAR_PROFILE_AGL_LIMIT = 60
+
+/**
+ * Full-range terrain profile for contour visibility occlusion.
+ * Stores the effective elevation (rawElev − curvDrop) at every distance step
+ * of the Phase 4c silhouette march, for each azimuth.  AGL-independent —
+ * the main thread computes a running-max-angle envelope at the current
+ * viewer height to determine which contour crossings are hidden behind
+ * closer terrain.
+ *
+ * Capped at ~150 km (beyond that, existing occlusion works fine).
+ * Memory: 2880 azimuths × ~1000 steps × 4 bytes ≈ 11.5 MB.
+ * Envelope recompute: ~2.9M multiply+compare ops ≈ 5–10 ms on mobile.
+ */
+export interface TerrainProfile {
+  /** Effective elevation at each (azimuth, distance step), row-major.
+   *  Index: ai * numSteps + si.  effElev = rawElev − curvDrop. */
+  profileData: Float32Array
+  /** Shared distance breakpoints in metres, sorted ascending (length = numSteps). */
+  distances: Float32Array
+  /** Number of distance steps per azimuth. */
+  numSteps: number
+  /** Azimuth resolution (steps per degree). Matches silhouette resolution (8). */
+  resolution: number
+  /** Total azimuths = 360 × resolution. */
+  numAzimuths: number
+}
+
+/**
+ * Dense near-field elevation profile for proper terrain occlusion.
+ * Stores raw (elevation, distance) pairs at ~50 evenly-log-spaced samples
+ * per azimuth for the 0–2km range.  AGL-independent — the main thread
+ * re-projects to elevation angles at the current viewer height.
+ *
+ * This fixes the "see-through mountains" problem: band fills only know
+ * the ridgeline (max angle), not the terrain surface shape below it.
+ * The near profile captures the FULL terrain surface so it can be rendered
+ * as an opaque fill that blocks all far terrain behind it.
+ *
+ * Memory: 2880 azimuths × 50 samples × 2 floats × 4 bytes = ~1.1 MB.
+ * Reprojection: 144K atan2 calls ≈ 1.5ms on mobile.
+ */
+export interface NearFieldProfile {
+  /** Packed profile data: [rawElev₀, dist₀, rawElev₁, dist₁, ...] per azimuth.
+   *  All azimuths concatenated — use profileOffsets to index.
+   *  Within each azimuth, samples are sorted near→far by distance. */
+  profileData: Float32Array
+  /** Number of actual samples per azimuth (may be less than NEAR_PROFILE_SAMPLES
+   *  if terrain is sparse).  Length = numAzimuths. */
+  sampleCounts: Uint16Array
+  /** Azimuth resolution (steps per degree). Matches silhouette resolution (8). */
+  resolution: number
+  /** Total azimuths = 360 × resolution. */
+  numAzimuths: number
+  /** Number of floats per sample (2: rawElev, dist). */
+  floatsPerSample: 2
+}
+
 // ─── SCAN — Skyline Precomputation ────────────────────────────────────────────
 
 /**
@@ -429,6 +583,22 @@ export interface SkylineData {
   /** Refined arcs — dense ray-march data around detected ridgeline features.
    *  Used for high-resolution peak ridgeline rendering. Empty if no features detected. */
   refinedArcs: RefinedArc[]
+  /** Depth-peeled silhouette data — local elevation maxima per azimuth across
+   *  all distance bins.  AGL-independent; the main thread computes visibility
+   *  at render time via front-to-back sweep.  Null if silhouette computation
+   *  was skipped (e.g. very old worker). */
+  silhouette?: SilhouetteData | null
+  /** Full-range terrain profile for contour visibility occlusion.
+   *  Stores effElev at every Phase 4c distance step per azimuth (capped ~150 km).
+   *  The main thread builds a running-max-angle envelope from this to determine
+   *  which contour crossings are hidden behind closer terrain.
+   *  Null if not computed (e.g. very old worker). */
+  terrainProfile?: TerrainProfile | null
+  /** Dense near-field elevation profile (0–2km) for opaque terrain occlusion.
+   *  Fixes the "see-through mountains" problem where band fills only capture
+   *  the ridgeline, not the full terrain surface shape.
+   *  Null if near-field profile was not computed (e.g. very old worker). */
+  nearProfile?: NearFieldProfile | null
   /** Steps per degree — 2 means 0.5°/step (720 azimuths) */
   resolution:  number
   /** Total azimuth steps = 360 × resolution */
