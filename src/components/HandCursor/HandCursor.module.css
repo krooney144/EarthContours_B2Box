@@ -15,11 +15,25 @@
   align-items: center;
   gap: 4px;
   transition: filter 0.15s ease;
+  /* Accent color — overridden by .handLeft / .handRight */
+  --hand-accent: var(--ec-glow, #84D1DB);
+  /* Subtle colored glow around each cursor, hand-specific */
+  filter: drop-shadow(0 0 6px var(--hand-accent));
 }
 
-/* When fist is closed (clicking), add a glow effect */
+/* Right hand — glow (teal-aqua) accent */
+.handRight {
+  --hand-accent: var(--ec-glow, #84D1DB);
+}
+
+/* Left hand — foam (pale cyan) accent, distinct from right */
+.handLeft {
+  --hand-accent: var(--ec-foam, #A7DDE5);
+}
+
+/* When fist is closed (clicking), amplify the hand-specific glow */
 .cursorActive {
-  filter: drop-shadow(0 0 12px var(--color-glow, #00e5ff));
+  filter: drop-shadow(0 0 14px var(--hand-accent));
 }
 
 /* The hand emoji/icon */
@@ -28,14 +42,15 @@
   line-height: 1;
 }
 
-/* L/R hand label */
+/* L/R hand label — background tint matches the hand's accent color */
 .label {
   font-size: 10px;
   font-weight: 700;
   font-family: 'SF Mono', 'Fira Code', monospace;
-  color: var(--color-foam, #e0f7fa);
-  background: rgba(0, 0, 0, 0.5);
-  padding: 1px 4px;
+  color: var(--ec-void, #000810);
+  background: var(--hand-accent);
+  padding: 1px 6px;
   border-radius: 3px;
   letter-spacing: 1px;
+  box-shadow: 0 0 4px var(--hand-accent);
 }

@@ -1,0 +1,64 @@
+/**
+ * CooldownPill — Styled "⏱ New location available in Xs" pill.
+ *
+ * Positioned at the top of the map area. Parent is responsible for
+ * placing it in the correct grid cell; this module only styles the
+ * pill's visual appearance.
+ */
+
+/* ── Pill container ────────────────────────────────────────────────────── */
+.pill {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;             /* Above map, below hand cursors (z:100) */
+
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+
+  background: var(--ec-bg-overlay, rgba(13, 30, 46, 0.92));
+  border: 1px solid var(--ec-border-active, rgba(132, 209, 219, 0.45));
+  border-radius: 9999px;   /* Full pill */
+  box-shadow: var(--shadow-glow, 0 0 12px rgba(132, 209, 219, 0.25));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+
+  font-family: var(--font-body, 'Jost', sans-serif);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ec-text-primary, #F0F8FF);
+  letter-spacing: 0.3px;
+
+  pointer-events: none;    /* Purely informational; don't block gestures */
+  user-select: none;
+  -webkit-user-select: none;
+
+  animation: pill-fade-in 250ms ease-out forwards;
+}
+
+/* ── Clock icon ────────────────────────────────────────────────────────── */
+.icon {
+  font-size: 16px;
+  line-height: 1;
+  color: var(--ec-glow, #84D1DB);
+}
+
+/* ── Countdown text ────────────────────────────────────────────────────── */
+.text {
+  white-space: nowrap;
+}
+
+/* ── Fade in on mount ──────────────────────────────────────────────────── */
+@keyframes pill-fade-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}

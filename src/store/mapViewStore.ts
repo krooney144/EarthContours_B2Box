@@ -92,19 +92,6 @@ interface MapViewStore {
    */
   panBy: (dx: number, dy: number) => void
  
-  /**
-   * Convert a normalised screen position (0–1) to lat/lng.
-   *
-   * Used by the pointing gesture to work out which real-world location
-   * the hand is pointing at on screen.
-   *
-   * xNorm = 0 is left edge, 1 is right edge
-   * yNorm = 0 is top edge,  1 is bottom edge
-   *
-   * Returns { lat, lng } of that screen position.
-   */
-  getLatLngAtNorm: (xNorm: number, yNorm: number) => { lat: number; lng: number }
- 
   /** Zoom in by 1 integer step */
   zoomIn: () => void
  
@@ -166,45 +153,6 @@ export const useMapViewStore = create<MapViewStore>()((set, get) => ({
     })
  
     pan(dLat, dLng)
-  },
- 
-  // ── NEW: getLatLngAtNorm ──────────────────────────────────────────────────
-  //
-  // Called by B2MapScreen when a pointing gesture fires, to find out
-  // which lat/lng the hand is pointing at.
-  //
-  // How it works:
-  //   The screen center = centerLat / centerLng (from the store).
-  //   xNorm=0.5, yNorm=0.5 is the exact center → returns centerLat/centerLng.
-  //   xNorm=0 is the left edge → subtract half the screen's lng span.
-  //   yNorm=0 is the top edge  → add    half the screen's lat span.
-  //
-  //   "span" = how many degrees of lat/lng fit on the whole screen at
-  //            this zoom level.
- 
-  getLatLngAtNorm: (xNorm, yNorm) => {
-    const { centerLat, centerLng, zoom } = get()
- 
-    const screenW = window.innerWidth
-    const screenH = window.innerHeight
- 
-    // Total degrees visible across the full screen width/height
-    const lngSpan = pxToLng(screenW, zoom)
-    const latSpan = pxToLat(screenH, zoom)
- 
-    // Offset from center: xNorm=0.5 → 0 offset, xNorm=0 → -0.5 span
-    const dLng = (xNorm - 0.5) * lngSpan
-    const dLat = (0.5 - yNorm) * latSpan // flipped: top of screen = higher lat
- 
-    const lat = clampLat(centerLat + dLat)
-    const lng = wrapLng(centerLng + dLng)
- 
-    log.debug('getLatLngAtNorm', {
-      xNorm: xNorm.toFixed(3), yNorm: yNorm.toFixed(3),
-      lat: lat.toFixed(4), lng: lng.toFixed(4),
-    })
- 
-    return { lat, lng }
   },
  
   zoomIn: () => {

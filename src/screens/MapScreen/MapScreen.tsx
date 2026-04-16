@@ -1921,24 +1921,13 @@ const MapScreen: React.FC<MapScreenProps> = ({ exhibitMode = false }) => {
       return
     }
 
-    if (dragRef.current.isDragging && !dragRef.current.hasMoved) {
-      const canvas = canvasRef.current
-      if (!canvas) return
-      const rect   = canvas.getBoundingClientRect()
-      const px     = e.clientX - rect.left
-      const py     = e.clientY - rect.top
-      const coords = pixelToLatLng(px, py, centerLat, centerLng, zoom, rect.width, rect.height)
-
-      log.info('Map tap → setting explore location', {
-        lat: coords.lat.toFixed(5),
-        lng: coords.lng.toFixed(5),
-      })
-      setExploreLocation(coords.lat, coords.lng)
-      setShowTapHint(false)
-    }
+    // Tap-to-select removed: in B2 exhibit mode the blue location dot only
+    // moves via the hand-point gesture (2-second hold). Click-and-drag still
+    // pans the map (handled by the drag code path above). A plain click with
+    // no drag is intentionally a no-op.
 
     dragRef.current.isDragging = false
-  }, [centerLat, centerLng, zoom, setExploreLocation, isSelectingArea, selectionStart, selectionEnd])
+  }, [isSelectingArea, selectionStart, selectionEnd])
 
   // ── Scroll Zoom ───────────────────────────────────────────────────────────────
 

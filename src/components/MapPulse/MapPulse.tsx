@@ -36,6 +36,16 @@ interface MapPulseProps {
    * A value of 0 means "no pulse yet" — first pulse fires when trigger > 0.
    */
   trigger: number
+  /**
+   * Optional X position in pixels within the parent map container.
+   * Defaults to the container center if not provided.
+   */
+  x?: number
+  /**
+   * Optional Y position in pixels within the parent map container.
+   * Defaults to the container center if not provided.
+   */
+  y?: number
 }
 
 /**
@@ -45,7 +55,11 @@ interface MapPulseProps {
  */
 const PULSE_DURATION_MS = 2700
 
-const MapPulse: React.FC<MapPulseProps> = ({ trigger }) => {
+const MapPulse: React.FC<MapPulseProps> = ({ trigger, x, y }) => {
+  // Snapshot the position at trigger time so the pulse stays at the selected
+  // location even if the hand moves before the animation completes.
+  const [pulsePosition, setPulsePosition] = useState<{ x: number; y: number } | null>(null)
+
   // activeKey changes on each trigger, forcing React to remount the pulseGroup
   // div with a new key — this restarts the CSS animations from the beginning.
   const [activeKey, setActiveKey] = useState(0)
@@ -53,6 +67,11 @@ const MapPulse: React.FC<MapPulseProps> = ({ trigger }) => {
 
   useEffect(() => {
     if (trigger === 0) return
+
+    // Snapshot position at trigger time — the hand may move before the
+    // animation completes, but the pulse should stay anchored to where
+    // the selection actually landed.
+    setPulsePosition(x !== undefined && y !== undefined ? { x, y } : null)
 
     // Change key to force CSS animation restart
     setActiveKey(trigger)
@@ -64,15 +83,24 @@ const MapPulse: React.FC<MapPulseProps> = ({ trigger }) => {
     }, PULSE_DURATION_MS)
 
     return () => clearTimeout(timer)
+    // x/y intentionally omitted: we want to snapshot once per trigger, not
+    // restart the animation every time the hand moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trigger])
 
   if (!visible) return null
+
+  // If a position was supplied at trigger time, use it; otherwise fall back
+  // to the CSS default (50%/50% — container center).
+  const groupStyle = pulsePosition
+    ? { top: `${pulsePosition.y}px`, left: `${pulsePosition.x}px` }
+    : undefined
 
   return (
     <div className={styles.container} aria-hidden="true">
       {/* key={activeKey} forces React to destroy+recreate this div on each
           trigger, which restarts all CSS animations from their 0% keyframe */}
-      <div key={activeKey} className={styles.pulseGroup}>
+      <div key={activeKey} className={styles.pulseGroup} style={groupStyle}>
         {/* Three concentric rings with staggered animation-delay.
             Ring styles (color, delay, width) are in MapPulse.module.css.
             To add more rings: add another div here + a .ring4 class in CSS. */}
