@@ -32,7 +32,7 @@ body {
   font-family: var(--font-body);
   font-size: var(--text-base);
   color: var(--ec-text-primary);
-  background-color: var(--ec-bg-primary);
+  background-color: var(--ec-void);
 
   /* Prevent horizontal scroll */
   overflow-x: hidden;
