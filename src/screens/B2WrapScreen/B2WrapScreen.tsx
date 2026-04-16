@@ -61,7 +61,7 @@ import {
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
   buildSilhouetteLayers, matchSilhouetteStrands,
-  renderSilhouetteGlow, renderSilhouetteStrokes,
+  renderSilhouetteStrokes,
   buildVisibilityEnvelope,
 } from '../ScanScreen/scanRendererCore'
 import ScopeOverlay, {
@@ -340,11 +340,11 @@ const B2WrapScreen: React.FC = () => {
       renderContours(ctx, contourStrands, cam, cElevMin, cElevMax, skylineData, projectedBands)
     }
 
-    // 3b. Silhouette glow + edge strokes (drawn on top of contours)
-    // Glow renders first (atmospheric halo), then crisp strokes on top.
+    // 3b. Silhouette edge strokes (drawn on top of contours).
+    // Glow pass intentionally skipped on wrap — its three stacked passes
+    // alias into visible ring artifacts when magnified by the scope lens.
     if (showSilhouetteLines && silhouetteLayers && silhouetteStrands.length > 0 && skylineData?.silhouette) {
       const silRes = skylineData.silhouette.resolution
-      renderSilhouetteGlow(ctx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
       renderSilhouetteStrokes(ctx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
     }
 
