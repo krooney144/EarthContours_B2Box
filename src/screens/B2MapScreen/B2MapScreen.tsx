@@ -1,9 +1,8 @@
 /**
  * B2 Map Screen — Fullscreen top-down table projection surface
  *
- * Fixed 1920×1080 layout for ceiling-mounted projector on a table.
- * Visitors stand around all 4 sides and interact via control strips
- * (for testing) or via MediaPipe hand tracking (for the exhibit).
+ * Fixed 1800×1800 layout for ceiling-mounted projector on a table.
+ * Visitors interact via MediaPipe hand tracking (camera-tracked).
  *
  * ─── OSC / WEBSOCKET INTEGRATION ───
  *
@@ -41,13 +40,13 @@
  *
  * Layout:
  *   ┌──────────────────────────────────┐
- *   │          TOP STRIP (160px)       │
- *   ├──────┬──────────────────┬────────┤
- *   │ LEFT │   MapScreen      │ RIGHT  │
- *   │ 200px│   + crosshair    │ 200px  │
- *   │      │   + hand cursors │        │
- *   ├──────┴──────────────────┴────────┤
- *   │        BOTTOM STRIP (160px)      │
+ *   │                                  │
+ *   │         MapScreen (1fr)          │
+ *   │         + hand cursors           │
+ *   │         + pulse rings            │
+ *   │                                  │
+ *   ├──────────────────────────────────┤
+ *   │    Hand Instructions (240px)     │
  *   └──────────────────────────────────┘
  */
 
@@ -56,7 +55,7 @@ import { io, Socket } from 'socket.io-client'
 import { useMapViewStore, useLocationStore } from '../../store'
 import { createLogger } from '../../core/logger'
 import MapScreen from '../MapScreen/MapScreen'
-import ControlStrip from './ControlStrip'
+import HandInstructions from './HandInstructions'
 import HandCursor from '../../components/HandCursor'
 import MapPulse from '../../components/MapPulse'
 import type { HandState, HandSide } from '../../components/HandCursor'
@@ -90,11 +89,29 @@ interface HandTracker {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+const DESIGN_W = 1800
+const DESIGN_H = 1800
+
 const B2MapScreen: React.FC = () => {
   log.info('B2MapScreen mounted')
 
   const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
   const socketRef = useRef<Socket | null>(null)
+  const screenRef = useRef<HTMLDivElement>(null)
+
+  // ─── SCALE-TO-FIT ───────────────────────────────────────────────────────
+  // Shrinks the 1800×1800 design to fit the current window during dev.
+  // At exhibit resolution (1800×1800 window) the scale is 1:1.
+  useEffect(() => {
+    const updateScale = () => {
+      if (!screenRef.current) return
+      const s = Math.min(window.innerWidth / DESIGN_W, window.innerHeight / DESIGN_H)
+      screenRef.current.style.setProperty('--scale-factor', String(s))
+    }
+    updateScale()
+    window.addEventListener('resize', updateScale)
+    return () => window.removeEventListener('resize', updateScale)
+  }, [])
 
   // ─── HAND STATE ─────────────────────────────────────────────────────────
   //
@@ -471,7 +488,7 @@ const B2MapScreen: React.FC = () => {
   // ─── RENDER ──────────────────────────────────────────────────────────────
 
   return (
-    <div className={styles.screen}>
+    <div ref={screenRef} className={styles.screen}>
 
       {/* SIM MODE TOGGLE — top-right corner */}
       {/* Left click = pan/drag, Right click = point-select location */}
@@ -485,39 +502,15 @@ const B2MapScreen: React.FC = () => {
         {simMode ? 'SIM ON' : 'SIM OFF'}
       </button>
 
-      {/* Top control strip */}
-      <div className={styles.topStrip}>
-        <ControlStrip side="top" />
+      {/* Map — grid places it in row 2, col 2 (60px border on top/sides) */}
+      <div className={styles.mapContainer}>
+        <MapScreen exhibitMode={true} />
+        <MapPulse trigger={pulseTrigger} />
       </div>
 
-      {/* Middle row: left strip + map + right strip */}
-      <div className={styles.middleRow}>
-        <div className={styles.leftStrip}>
-          <ControlStrip side="left" />
-        </div>
-
-        <div className={styles.mapContainer}>
-          <MapScreen exhibitMode={true} />
-
-          {/* Crosshair — centre reference point */}
-          <div className={styles.crosshair} aria-hidden="true">
-            <div className={styles.crosshairH} />
-            <div className={styles.crosshairV} />
-            <div className={styles.crosshairDot} />
-          </div>
-
-          {/* Pulse rings appear when a location is selected */}
-          <MapPulse trigger={pulseTrigger} />
-        </div>
-
-        <div className={styles.rightStrip}>
-          <ControlStrip side="right" />
-        </div>
-      </div>
-
-      {/* Bottom control strip */}
-      <div className={styles.bottomStrip}>
-        <ControlStrip side="bottom" />
+      {/* Hand gesture instructions — 240px bottom strip */}
+      <div className={styles.instructionStrip}>
+        <HandInstructions />
       </div>
 
       {/* ── HAND CURSORS ──────────────────────────────────────────────────── */}

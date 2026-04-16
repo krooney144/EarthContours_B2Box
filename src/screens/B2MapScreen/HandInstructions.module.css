@@ -1,0 +1,213 @@
+/**
+ * Hand Instructions strip — bottom of B2-Map table.
+ *
+ * 4 gesture cells separated by thin dividers. Each cell: icon group above,
+ * tracked-out label below. All strokes use `currentColor` so the .iconWrap
+ * controls color + glow for every primitive inside it.
+ */
+
+/* ─── Strip container ─────────────────────────────────────────────────────── */
+
+.strip {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  /* 4 cells of equal width, 1px dividers between */
+  grid-template-columns: 1fr 1px 1fr 1px 1fr 1px 1fr;
+  align-items: stretch;
+  background: var(--ec-void);
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+/* ─── Cell layout ──────────────────────────────────────────────────────────── */
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 12px;
+  gap: 14px;
+}
+
+.divider {
+  width: 1px;
+  margin: 30px 0;
+  background: var(--ec-border);
+}
+
+/* ─── Icon wrap: sets the neon color + glow for everything inside ────────── */
+/*
+ * `color: var(--ec-glow)` propagates to `currentColor` in every SVG stroke.
+ * `filter: drop-shadow(...)` paints a soft halo around all children at once,
+ * which lets the hand + arrows + rings share one coherent glow.
+ */
+
+/* Hands get the bright cyan + stronger glow */
+.iconWrap {
+  color: var(--ec-glow);
+  filter:
+    drop-shadow(0 0 14px var(--ec-glow-strong))
+    drop-shadow(0 0 28px var(--ec-glow-soft));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 140px;
+}
+
+/* Decorator elements (arrows, rings) — darker, bluer, subtler glow.
+ * Uses --ec-mid (#4B8EA3) which sits two stops below --ec-glow in the palette. */
+.decor {
+  color: var(--ec-mid);
+  filter: drop-shadow(0 0 6px var(--ec-glow-soft));
+}
+
+/* All hands render at the same size — SVGs share 762×760 viewBox,
+ * so equal CSS dimensions = visually uniform hands. */
+.handBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 105px;
+  height: 105px;
+}
+
+.handBox.mirrored {
+  transform: scaleX(-1);
+}
+
+.hand {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ─── Pan cell: grab hand centred with 4 arrows around it ────────────────── */
+
+.panGroup {
+  position: relative;
+  width: 240px;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Pan hand uses the global .handBox size — no override needed */
+
+.panArrow {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Up/down arrows — slightly further from hand for vertical breathing room */
+.panUp {
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.panDown {
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(180deg);
+}
+
+/* Left/right arrows — pulled closer to the hand so it feels centred */
+.panLeft {
+  left: 46px;
+  top: 50%;
+  transform: translateY(-50%) rotate(-90deg);
+}
+
+.panRight {
+  right: 46px;
+  top: 50%;
+  transform: translateY(-50%) rotate(90deg);
+}
+
+/* ─── Zoom cell: two mirrored grab hands with ↔ between them ─────────────── */
+
+.zoomGroup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Zoom hands use the global .handBox size — no override needed */
+
+/* Zoom arrows — two filled arrows with a connecting line between them */
+/* Zoom arrows — two filled arrows whose tails overlap in the middle.
+ * Negative margin pulls them together so the tail lines connect seamlessly. */
+.zoomArrowGroup {
+  display: flex;
+  align-items: center;
+}
+
+.zoomSideArrow {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Default: points left */
+  transform: rotate(-90deg);
+  /* Overlap tails */
+  margin-right: -10px;
+}
+
+.zoomRight {
+  transform: rotate(90deg);
+  margin-right: 0;
+  margin-left: -10px;
+}
+
+/* ─── Point cell: pointing hand with concentric rings behind ─────────────── */
+
+.pointGroup {
+  position: relative;
+  width: 180px;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rings {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Shift rings 10px left so the pointing hand looks visually centred within them */
+  left: -10px;
+  right: 10px;
+  width: calc(100% + 0px);
+  height: 100%;
+  pointer-events: none;
+}
+
+.pointGroup .handBox {
+  position: relative;  /* above rings */
+  z-index: 1;
+  /* uses global .handBox size */
+}
+
+/* ─── Label ────────────────────────────────────────────────────────────────── */
+
+.label {
+  font-family: var(--font-display, 'Josefin Sans', sans-serif);
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ec-text-accent);
+  text-align: center;
+  line-height: 1.3;
+  max-width: 320px;
+  text-shadow: 0 0 8px var(--ec-glow-medium);
+}
