@@ -42,11 +42,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io, Socket } from 'socket.io-client'
-import { useCameraStore, useLocationStore, useTerrainStore, useSettingsStore } from '../../store'
+import { useCameraStore, useLocationStore, useSettingsStore } from '../../store'
 import { createLogger } from '../../core/logger'
 import { MAX_HEIGHT_M, MIN_HEIGHT_M } from '../../core/constants'
-import { formatElevation, metersToFeet, headingToCompass } from '../../core/utils'
+import { formatElevation, metersToFeet } from '../../core/utils'
 import { fetchPeaksNear } from '../../data/peakLoader'
+import { getPeaksInBounds } from '../../data/peakDatabase'
 import type { Peak, SkylineData, RefinedArc, PeakRefineItem, SilhouetteLayer } from '../../core/types'
 import { DEPTH_BANDS } from '../../core/types'
 import {
@@ -61,7 +62,7 @@ import {
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
   buildSilhouetteLayers, matchSilhouetteStrands,
-  renderSilhouetteStrokes,
+  renderSilhouetteStrokes, renderSilhouetteGlow,
   buildVisibilityEnvelope,
 } from '../ScanScreen/scanRendererCore'
 import ScopeOverlay, {
@@ -155,10 +156,14 @@ const B2WrapScreen: React.FC = () => {
   const { height_m, setHeightFromSlider } = useCameraStore()
   const { activeLat, activeLng } = useLocationStore()
   const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
-  const { peaks } = useTerrainStore()
   const { units, showBandLines, showFill, showSilhouetteLines, showPeakLabels } = useSettingsStore()
 
   const canvasRef       = useRef<HTMLCanvasElement>(null)
+  // Offscreen "base" canvas — sky/stars/terrain/contours/silhouette strokes.
+  // No silhouette glow, no horizon glow. The scope reads from this canvas so
+  // it never sees the magnified glow aliasing. The main wrap canvas composites
+  // this base and then draws the glow passes on top.
+  const baseCanvasRef   = useRef<HTMLCanvasElement | null>(null)
   const containerRef    = useRef<HTMLDivElement>(null)
   const rafRef          = useRef<number>(0)
   const skylineWorker   = useRef<Worker | null>(null)
@@ -197,7 +202,21 @@ const B2WrapScreen: React.FC = () => {
   // Keep a ref to the socket so we can access it in cleanup
   const socketRef = useRef<Socket | null>(null)
 
-  const activePeaks: Peak[] = osmPeaks.length > 0 ? osmPeaks : peaks
+  // Static worldwide peak database — instant fallback when Overpass is down.
+  // Recomputed only when the viewer location changes. ~200-entry scan, sub-ms.
+  const databasePeaks = useMemo<Peak[]>(() => {
+    const cosLat = Math.cos(activeLat * DEG_TO_RAD)
+    // 130 km box matches the peakLoader fetch radius.
+    const dLat = 130 / 111.132
+    const dLng = 130 / (111.320 * cosLat)
+    return getPeaksInBounds(
+      activeLat + dLat, activeLat - dLat,
+      activeLng + dLng, activeLng - dLng,
+    )
+  }, [activeLat, activeLng])
+
+  // OSM peaks win when available (richer set); database peaks are the fallback.
+  const activePeaks: Peak[] = osmPeaks.length > 0 ? osmPeaks : databasePeaks
 
   // ── Re-projection on AGL change ─────────────────────────────────────────
 
@@ -297,15 +316,26 @@ const B2WrapScreen: React.FC = () => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    // Ensure native resolution
+    // Ensure native resolution on both the visible canvas and the offscreen
+    // "base" canvas that the scope lens reads from.
     if (canvas.width !== WRAP_W || canvas.height !== WRAP_H) {
       canvas.width = WRAP_W
       canvas.height = WRAP_H
     }
+    if (!baseCanvasRef.current) {
+      baseCanvasRef.current = document.createElement('canvas')
+    }
+    const baseCanvas = baseCanvasRef.current
+    if (baseCanvas.width !== WRAP_W || baseCanvas.height !== WRAP_H) {
+      baseCanvas.width = WRAP_W
+      baseCanvas.height = WRAP_H
+    }
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    const mainCtx = canvas.getContext('2d')
+    const baseCtx = baseCanvas.getContext('2d')
+    if (!mainCtx || !baseCtx) return
+    mainCtx.setTransform(1, 0, 0, 1, 0, 0)
+    baseCtx.setTransform(1, 0, 0, 1, 0, 0)
 
     const renderScale = 1
 
@@ -318,12 +348,17 @@ const B2WrapScreen: React.FC = () => {
       scale:       renderScale,
     }
 
+    // ── Pass A: offscreen base canvas ──────────────────────────────────────
+    // Everything common to both wrap and scope: sky, stars, terrain bands,
+    // contours, silhouette strokes. NO silhouette glow, NO horizon glow —
+    // those alias badly when magnified through the scope.
+
     // 1. Sky + stars
-    drawSkyAndStars(ctx, WRAP_W, WRAP_H)
+    drawSkyAndStars(baseCtx, WRAP_W, WRAP_H)
 
     // 2. Terrain bands (far→near painter's order)
     if (skylineData) {
-      renderTerrain(ctx, skylineData, cam, projectedBands, showBandLines, showFill)
+      renderTerrain(baseCtx, skylineData, cam, projectedBands, showBandLines, showFill)
     }
 
     // 3. Contour lines
@@ -337,54 +372,100 @@ const B2WrapScreen: React.FC = () => {
           if (elev[i] > cElevMax) cElevMax = elev[i]
         }
       }
-      renderContours(ctx, contourStrands, cam, cElevMin, cElevMax, skylineData, projectedBands)
+      renderContours(baseCtx, contourStrands, cam, cElevMin, cElevMax, skylineData, projectedBands)
     }
 
-    // 3b. Silhouette edge strokes (drawn on top of contours).
-    // Glow pass intentionally skipped on wrap — its three stacked passes
-    // alias into visible ring artifacts when magnified by the scope lens.
+    // 3b. Silhouette edge strokes (on base — visible to both wrap and scope).
     if (showSilhouetteLines && silhouetteLayers && silhouetteStrands.length > 0 && skylineData?.silhouette) {
       const silRes = skylineData.silhouette.resolution
-      renderSilhouetteStrokes(ctx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
+      renderSilhouetteStrokes(baseCtx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
     }
 
-    // 4. Horizon glow
-    drawHorizonGlow(ctx, cam)
+    // ── Pass B: main wrap canvas ───────────────────────────────────────────
+    // Blit the base layer, then add silhouette glow + horizon glow ONLY on
+    // the visible wrap. The scope's source (baseCanvas) stays glow-free.
+    mainCtx.drawImage(baseCanvas, 0, 0)
 
-    // 5. Peak positions (computed for HTML overlay labels)
+    // 3c. Silhouette glow (main wrap only — gives the ridges their atmosphere).
+    if (showSilhouetteLines && silhouetteLayers && silhouetteStrands.length > 0 && skylineData?.silhouette) {
+      const silRes = skylineData.silhouette.resolution
+      renderSilhouetteGlow(mainCtx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
+      // Re-stroke on top so crisp lines sit above the glow halo.
+      renderSilhouetteStrokes(mainCtx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
+    }
+
+    // 4. Horizon glow (main wrap only).
+    drawHorizonGlow(mainCtx, cam)
+
+    // 5. Peak positions (computed for scope overlay).
+    //    Two-pool selection: up to 25 nearest (<30 km) + up to 25 by elevation
+    //    angle. Pass 1 is cheap (bearing/dist/angle per peak); pass 2 runs
+    //    project + snap-to-ridgeline only for the union survivors (≤50).
     const eyeElev = groundElev + height_m
     const newPositions: PeakScreenPos[] = []
 
     if (skylineData && showPeakLabels) {
-      const visiblePeaks = activePeaks.filter(p =>
-        isPeakVisible(p, activeLat, activeLng, eyeElev, WRAP_HEADING, WRAP_HFOV, skylineData, projectedBands, visibilityEnvelope)
-      )
-      const topPeaks = visiblePeaks
-        .sort((a, b) => b.elevation_m - a.elevation_m)
-        .slice(0, 30) // More peaks visible in 360°
+      const cosLat = Math.cos(activeLat * DEG_TO_RAD)
 
-      for (const peak of topPeaks) {
+      // Pass 1 — visible peaks + lightweight metadata (no projection yet).
+      type PeakMeta = {
+        peak: Peak
+        bearing: number
+        horizDist: number
+        peakAngle: number
+      }
+      const meta: PeakMeta[] = []
+      for (const p of activePeaks) {
+        if (!isPeakVisible(p, activeLat, activeLng, eyeElev, WRAP_HEADING, WRAP_HFOV, skylineData, projectedBands, visibilityEnvelope)) continue
+        const dx = (p.lng - activeLng) * 111_320 * cosLat
+        const dy = (p.lat - activeLat) * 111_132
+        const horizDist = Math.sqrt(dx * dx + dy * dy)
+        if (horizDist > MAX_PEAK_DIST) continue
+        const bearing = ((Math.atan2(dx, dy) * 180 / Math.PI) + 360) % 360
+        const peakAngle = Math.atan2(
+          p.elevation_m - (horizDist * horizDist) / (2 * EARTH_R) * (1 - REFRACTION_K) - eyeElev,
+          horizDist,
+        )
+        meta.push({ peak: p, bearing, horizDist, peakAngle })
+      }
+
+      // Near pool: peaks within 30 km, sorted by distance ascending, top 25.
+      const nearPool = meta
+        .filter(m => m.horizDist < 30_000)
+        .sort((a, b) => a.horizDist - b.horizDist)
+        .slice(0, 25)
+      // Horizon pool: sorted by elevation angle descending, top 25.
+      const horizonPool = [...meta]
+        .sort((a, b) => b.peakAngle - a.peakAngle)
+        .slice(0, 25)
+
+      // Union by id (first-seen order).
+      const seen = new Set<string>()
+      const union: PeakMeta[] = []
+      for (const m of nearPool) {
+        const id = `${m.peak.lat}-${m.peak.lng}`
+        if (seen.has(id)) continue
+        seen.add(id)
+        union.push(m)
+      }
+      for (const m of horizonPool) {
+        const id = `${m.peak.lat}-${m.peak.lng}`
+        if (seen.has(id)) continue
+        seen.add(id)
+        union.push(m)
+      }
+
+      // Pass 2 — project + snap-to-ridgeline, only for survivors.
+      for (const { peak, bearing, horizDist, peakAngle } of union) {
         const proj = projectFirstPerson(
           peak.lat, peak.lng, peak.elevation_m,
           activeLat, activeLng, eyeElev, cam,
         )
         if (!proj) continue
-        let { screenX, screenY, horizDist } = proj
+        let { screenX, screenY } = proj
         if (screenX < -50 || screenX > WRAP_W + 50) continue
-        if (horizDist > MAX_PEAK_DIST) continue
-
-        // Snap to ridgeline
-        const bearing = ((Math.atan2(
-          (peak.lng - activeLng) * 111_320 * Math.cos(activeLat * DEG_TO_RAD),
-          (peak.lat - activeLat) * 111_132,
-        ) * 180 / Math.PI) + 360) % 360
 
         const ridgeAngle = skylineAngleAt(skylineData, bearing, projectedBands)
-        const peakAngle = Math.atan2(
-          peak.elevation_m - (horizDist * horizDist) / (2 * EARTH_R) * (1 - REFRACTION_K) - eyeElev,
-          horizDist,
-        )
-
         if (peakAngle <= ridgeAngle + 0.002) {
           let maxBandAngle = -Math.PI / 2
           for (let bi = 0; bi < skylineData.bands.length; bi++) {
@@ -407,6 +488,7 @@ const B2WrapScreen: React.FC = () => {
           lng: peak.lng,
           screenX,
           screenY,
+          peakAngle,
         })
       }
     }
@@ -742,37 +824,28 @@ const B2WrapScreen: React.FC = () => {
         {/* ── SCOPE OVERLAYS ──────────────────────────────────────────── */}
         {/* Circular magnified terrain scopes at tracker positions.       */}
         {/* Size controlled by layer_fraction from OSC data.              */}
-        {/* In SIM mode, scope 1 follows your mouse cursor.              */}
+        {/* Peak dots/labels render INSIDE each scope only — the wrap     */}
+        {/* view itself shows zero peak labels.                           */}
         <ScopeOverlay
           x={tracker1.x} y={tracker1.y}
           visible={tracker1.visible}
           diameter={tracker1.diameter}
-          canvasRef={canvasRef}
+          canvasRef={baseCanvasRef}
           distanceKm={scope1Distance}
           label="1"
+          peaks={peakPositions}
+          units={units}
         />
         <ScopeOverlay
           x={tracker2.x} y={tracker2.y}
           visible={tracker2.visible}
           diameter={tracker2.diameter}
-          canvasRef={canvasRef}
+          canvasRef={baseCanvasRef}
           distanceKm={scope2Distance}
           label="2"
+          peaks={peakPositions}
+          units={units}
         />
-
-        {/* ── PEAK LABELS (HTML overlay) ──────────────────────────────── */}
-        {showPeakLabels && peakPositions.length > 0 && (
-          <div className={styles.peakLabelsLayer} aria-label="Peak labels">
-            {peakPositions.map((pos) => (
-              <PeakLabel
-                key={pos.id}
-                pos={pos}
-                units={units}
-                canvasH={WRAP_H}
-              />
-            ))}
-          </div>
-        )}
 
         {/* Cardinal direction markers */}
         <div className={styles.cardinalMarker} style={{ left: '50%' }}>S</div>
@@ -861,55 +934,6 @@ const B2WrapScreen: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
-  )
-}
-
-// ─── Sub-Components ───────────────────────────────────────────────────────────
-
-const PeakLabel: React.FC<{
-  pos: PeakScreenPos
-  units: 'imperial' | 'metric'
-  canvasH: number
-}> = ({ pos, units, canvasH }) => {
-  const distFade  = Math.max(0.25, 1 - Math.pow(pos.dist_km / (MAX_PEAK_DIST / 1000), 0.5))
-  const isNearTop = pos.screenY < canvasH * 0.22
-
-  const card = (
-    <div className={styles.peakCard} aria-hidden="true">
-      <span className={styles.peakName}>{pos.name}</span>
-      <span className={styles.peakElev}>{formatElevation(pos.elevation_m, units)}</span>
-      <span className={styles.peakBearing}>
-        {headingToCompass(pos.bearing)} · {pos.dist_km.toFixed(0)} km
-      </span>
-    </div>
-  )
-
-  const DOT_HALF = 4
-  const posStyle: React.CSSProperties = isNearTop
-    ? { left: `${pos.screenX}px`, top: `${pos.screenY - DOT_HALF}px`, opacity: distFade }
-    : { left: `${pos.screenX}px`, bottom: `${canvasH - pos.screenY - DOT_HALF}px`, opacity: distFade }
-
-  return (
-    <div
-      className={`${styles.peakLabel} ${isNearTop ? styles.peakLabelFlipped : ''}`}
-      style={posStyle}
-      role="img"
-      aria-label={`${pos.name}, ${formatElevation(pos.elevation_m, units)}, ${pos.dist_km.toFixed(0)} km`}
-    >
-      {isNearTop ? (
-        <>
-          <div className={styles.peakDot}              aria-hidden="true" />
-          <div className={`${styles.peakLine} ${styles.peakLineDown}`} aria-hidden="true" />
-          {card}
-        </>
-      ) : (
-        <>
-          {card}
-          <div className={styles.peakLine}  aria-hidden="true" />
-          <div className={styles.peakDot}   aria-hidden="true" />
-        </>
-      )}
     </div>
   )
 }
