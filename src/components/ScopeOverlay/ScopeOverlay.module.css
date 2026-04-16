@@ -12,7 +12,10 @@
   z-index: 90;
 }
 
-/* The clipped terrain canvas fills the scope circle */
+/* The clipped terrain canvas fills the scope circle.
+   Filter lifts the lines/background so the lens reads as distinct from the
+   un-filtered wrap view behind it. Ring, crosshair, and labels live on
+   separate DOM elements so they stay unaffected. */
 .scopeCanvas {
   position: absolute;
   inset: 0;
@@ -20,6 +23,7 @@
   height: 100%;
   border-radius: 50%;
   overflow: hidden;
+  filter: brightness(1.15) contrast(1.15) saturate(1.1);
 }
 
 /* Outer ring — glowing border */

@@ -108,6 +108,12 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
 
       // Draw the magnified terrain
       ctx.drawImage(srcCanvas, sx, sy, srcW, srcH, 0, 0, size, size)
+
+      // Tint wash inside the clipped circle. Washes out the horizon-glow band
+      // and gives the lens its own subtle atmosphere — no separate render pass.
+      ctx.fillStyle = 'rgba(15, 30, 50, 0.25)'
+      ctx.fillRect(0, 0, size, size)
+
       ctx.restore()
 
       rafRef.current = requestAnimationFrame(draw)
