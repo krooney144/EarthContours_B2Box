@@ -1,0 +1,86 @@
+/**
+ * HoldPulse — 2-second building-pulse animation
+ *
+ * Three overlapping waves:
+ *   Wave 1:    0–700ms, grows to 80px, fades
+ *   Wave 2:  500–1300ms, grows to 140px, fades
+ *   Wave 3: 1000–2000ms, grows to 220px, holds at peak until unmount
+ *
+ * Total duration matches POINT_HOLD_MS (2000ms) in B2MapScreen.
+ * If you change the hold duration, adjust the keyframes here too.
+ */
+
+/* ── Container: positioned at captured hand x/y ────────────────────────── */
+.holdPulse {
+  position: absolute;
+  pointer-events: none;
+  z-index: 15;           /* Above map, below hand cursor (z:100) */
+  transform: translate(-50%, -50%);
+}
+
+/* ── Center dot: solid anchor point ────────────────────────────────────── */
+.center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ec-glow, #84D1DB);
+  box-shadow: 0 0 14px rgba(132, 209, 219, 0.85);
+  animation: hold-center-fade-in 300ms ease-out forwards;
+}
+
+/* ── Wave ring (shared base) ───────────────────────────────────────────── */
+.wave {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  border: 2px solid var(--ec-glow, #84D1DB);
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+/* ── Wave 1: first pulse, small (0 → 80px over 700ms) ──────────────────── */
+.wave1 {
+  animation: hold-wave-1 700ms ease-out forwards;
+  animation-delay: 0ms;
+}
+
+/* ── Wave 2: second pulse, medium (500 → 1300ms, 140px max) ────────────── */
+.wave2 {
+  animation: hold-wave-2 800ms ease-out forwards;
+  animation-delay: 500ms;
+}
+
+/* ── Wave 3: third pulse, largest — holds at peak (1000 → 2000ms) ──────── */
+.wave3 {
+  animation: hold-wave-3 1000ms ease-out forwards;
+  animation-delay: 1000ms;
+  border-width: 3px;   /* Thickest, most prominent */
+}
+
+/* ── Keyframes ─────────────────────────────────────────────────────────── */
+
+@keyframes hold-center-fade-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.3); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes hold-wave-1 {
+  0%   { width: 20px;  height: 20px;  opacity: 0.85; }
+  100% { width: 80px;  height: 80px;  opacity: 0; }
+}
+
+@keyframes hold-wave-2 {
+  0%   { width: 30px;  height: 30px;  opacity: 0.85; }
+  100% { width: 140px; height: 140px; opacity: 0; }
+}
+
+@keyframes hold-wave-3 {
+  0%   { width: 40px;  height: 40px;  opacity: 0.9; }
+  80%  { width: 200px; height: 200px; opacity: 0.7; }
+  100% { width: 220px; height: 220px; opacity: 0.85; }  /* Holds bright at peak */
+}

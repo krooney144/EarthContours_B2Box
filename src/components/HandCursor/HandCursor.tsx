@@ -53,9 +53,13 @@ const HAND_ICONS: Record<HandState, string> = {
 const HandCursor: React.FC<HandCursorProps> = ({ x, y, state, hand, visible }) => {
   if (!visible) return null
 
+  // Right hand uses the glow palette accent; left uses foam for a subtle
+  // visual distinction so visitors can tell which hand is which on screen.
+  const handClass = hand === 'left' ? styles.handLeft : styles.handRight
+
   return (
     <div
-      className={`${styles.cursor} ${state === 'closed' ? styles.cursorActive : ''}`}
+      className={`${styles.cursor} ${handClass} ${state === 'closed' ? styles.cursorActive : ''}`}
       style={{
         left: `${x}px`,
         top: `${y}px`,
@@ -65,7 +69,7 @@ const HandCursor: React.FC<HandCursorProps> = ({ x, y, state, hand, visible }) =
     >
       {/* Hand icon — changes based on state */}
       <span className={styles.icon}>{HAND_ICONS[state]}</span>
-      {/* Hand label (L or R) */}
+      {/* Hand label (L or R) — color-coded to match hand accent */}
       <span className={styles.label}>{hand === 'left' ? 'L' : 'R'}</span>
     </div>
   )
