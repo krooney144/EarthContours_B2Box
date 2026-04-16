@@ -12,10 +12,18 @@
  * Also displays a distance readout showing how far the terrain is at the
  * scope's center bearing, looked up from the skyline band data.
  *
+ * Peak dots and labels render on an HTML overlay layered above the scope
+ * canvas. Dots always show for peaks within the magnified source region;
+ * full labels (name + elevation + miles) show only when the scope is
+ * large enough and are capped at the top 6 by crosshair proximity +
+ * elevation angle priority.
+ *
  * USED BY: B2WrapScreen
  */
 
 import React, { useRef, useEffect } from 'react'
+import type { PeakScreenPos } from '../../screens/ScanScreen/scanRendererCore'
+import { formatElevation } from '../../core/utils'
 import styles from './ScopeOverlay.module.css'
 
 // ─── TUNABLE CONSTANTS ──────────────────────────────────────────────────────
@@ -35,6 +43,31 @@ export const SCOPE_SIZE_MAX_PX = 350
 /** Magnification factor for the terrain inside the scope */
 export const SCOPE_ZOOM = 2.0
 
+/** Fraction of the scope radius a peak must be within (to the crosshair) to
+ *  be eligible for a label. Dots still draw for every peak inside the source
+ *  region — this is only about when labels turn on. */
+const LABEL_ELIGIBILITY_FRACTION = 0.7
+/** Maximum number of full labels rendered per scope (picked by priority). */
+const MAX_LABELS_PER_SCOPE = 5
+/** Minimum on-screen separation between accepted labels, in px. Below this,
+ *  the lower-priority label is dropped to prevent overlap stacks. */
+const LABEL_MIN_SEPARATION_PX = 60
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+/**
+ * Format peak distance for scope labels. Always imperial.
+ *   >= 10 mi → whole miles
+ *   >= 0.1 mi → one-decimal miles
+ *   else     → whole feet
+ */
+function formatPeakDistance(dist_km: number): string {
+  const miles = dist_km * 0.621371
+  if (miles >= 10)  return `${Math.round(miles)} mi`
+  if (miles >= 0.1) return `${miles.toFixed(1)} mi`
+  return `${Math.round(dist_km * 3280.84)} ft`
+}
+
 interface ScopeOverlayProps {
   /** X position in pixels from left edge */
   x: number
@@ -50,10 +83,14 @@ interface ScopeOverlayProps {
   distanceKm: number | null
   /** Tracker label */
   label: string
+  /** Projected peak positions (native-canvas coordinates) to render inside */
+  peaks: PeakScreenPos[]
+  /** Unit system for elevation formatting */
+  units: 'imperial' | 'metric'
 }
 
 const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
-  x, y, visible, diameter, canvasRef, distanceKm, label,
+  x, y, visible, diameter, canvasRef, distanceKm, label, peaks, units,
 }) => {
   const scopeCanvasRef = useRef<HTMLCanvasElement>(null)
   const rafRef = useRef<number>(0)
@@ -75,6 +112,11 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
 
       const ctx = scopeCanvas.getContext('2d')
       if (!ctx) return
+
+      // High-quality resampling makes the magnified terrain lines read cleaner
+      // at the 2× zoom rather than pixel-doubled.
+      ctx.imageSmoothingEnabled = true
+      ctx.imageSmoothingQuality = 'high'
 
       ctx.clearRect(0, 0, size, size)
 
@@ -106,13 +148,11 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
       const sx = cx - srcW / 2
       const sy = cy - srcH / 2
 
-      // Draw the magnified terrain
+      // Draw the magnified terrain. Source canvas is the glow-free "base"
+      // layer from B2WrapScreen — no silhouette glow, no horizon glow, so
+      // the scope never magnifies aliasing halos. Brightness/contrast lift
+      // happens in CSS (.scopeCanvas filter) for free GPU compositing.
       ctx.drawImage(srcCanvas, sx, sy, srcW, srcH, 0, 0, size, size)
-
-      // Tint wash inside the clipped circle. Washes out the horizon-glow band
-      // and gives the lens its own subtle atmosphere — no separate render pass.
-      ctx.fillStyle = 'rgba(15, 30, 50, 0.25)'
-      ctx.fillRect(0, 0, size, size)
 
       ctx.restore()
 
@@ -124,6 +164,93 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
   }, [visible, diameter, x, y, canvasRef])
 
   if (!visible || diameter <= 0) return null
+
+  // ─── Peak dot / label layout ───────────────────────────────────────────
+  // peak.screenX/screenY are in wrap-canvas native pixels. Convert to the
+  // container's display px, find peaks inside the source region, magnify.
+  // The source canvas may be an offscreen buffer (no parentElement); fall
+  // back to its own native dimensions so scale resolves to 1:1 in that case.
+  const srcCanvas = canvasRef.current
+  const containerEl = srcCanvas?.parentElement ?? null
+  const containerW = containerEl?.clientWidth  ?? srcCanvas?.width  ?? 1
+  const containerH = containerEl?.clientHeight ?? srcCanvas?.height ?? 1
+  const wrapW = srcCanvas?.width  ?? containerW
+  const wrapH = srcCanvas?.height ?? containerH
+  const dispScaleX = containerW / wrapW
+  const dispScaleY = containerH / wrapH
+  const radius = diameter / 2
+  const sourceRadius = diameter / (2 * SCOPE_ZOOM)
+  const labelEligibilityRadius = radius * LABEL_ELIGIBILITY_FRACTION
+
+  type InScope = {
+    id: string
+    name: string
+    elevation_m: number
+    dist_km: number
+    peakAngle: number
+    localX: number  // px within the scope div
+    localY: number
+    crosshairDist: number
+    fade: number
+    priority: number
+  }
+  const inScope: InScope[] = []
+  for (const p of peaks) {
+    const peakDisplayX = p.screenX * dispScaleX
+    const peakDisplayY = p.screenY * dispScaleY
+    const dx = peakDisplayX - x
+    const dy = peakDisplayY - y
+    const distFromTracker = Math.sqrt(dx * dx + dy * dy)
+    if (distFromTracker > sourceRadius) continue
+    // Position relative to the scope div (top-left = x-radius, y-radius).
+    const localX = radius + dx * SCOPE_ZOOM
+    const localY = radius + dy * SCOPE_ZOOM
+    const crosshairDist = Math.sqrt(
+      (dx * SCOPE_ZOOM) * (dx * SCOPE_ZOOM) +
+      (dy * SCOPE_ZOOM) * (dy * SCOPE_ZOOM),
+    )
+    const fade = Math.max(0, 1 - crosshairDist / radius)
+    const peakAngle = p.peakAngle ?? 0
+    const priority =
+      0.7 * (1 - crosshairDist / radius) +
+      0.3 * (peakAngle / (Math.PI / 2))
+    inScope.push({
+      id: p.id,
+      name: p.name,
+      elevation_m: p.elevation_m,
+      dist_km: p.dist_km,
+      peakAngle,
+      localX,
+      localY,
+      crosshairDist,
+      fade,
+      priority,
+    })
+  }
+
+  // Label eligibility: the user is "aiming at" the peak — within 70% of the
+  // scope radius from the crosshair. Dots stay for all in-scope peaks; only
+  // labels are gated. Accept up to 5, dropping any candidate that would
+  // overlap (<60 px) an already-accepted higher-priority label.
+  const labelIds = new Set<string>()
+  const accepted: InScope[] = []
+  const candidates = inScope
+    .filter(p => p.crosshairDist <= labelEligibilityRadius)
+    .sort((a, b) => b.priority - a.priority)
+  for (const c of candidates) {
+    if (accepted.length >= MAX_LABELS_PER_SCOPE) break
+    let overlaps = false
+    for (const a of accepted) {
+      const sep = Math.sqrt(
+        (c.localX - a.localX) * (c.localX - a.localX) +
+        (c.localY - a.localY) * (c.localY - a.localY),
+      )
+      if (sep < LABEL_MIN_SEPARATION_PX) { overlaps = true; break }
+    }
+    if (overlaps) continue
+    accepted.push(c)
+    labelIds.add(c.id)
+  }
 
   return (
     <div
@@ -140,6 +267,37 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
         ref={scopeCanvasRef}
         className={styles.scopeCanvas}
       />
+
+      {/* Peak dots + labels — clipped to scope circle */}
+      <div className={styles.peakLayer}>
+        {inScope.map(p => {
+          const showLabel = labelIds.has(p.id)
+          return (
+            <React.Fragment key={p.id}>
+              <div
+                className={styles.peakDot}
+                style={{
+                  left: `${p.localX}px`,
+                  top:  `${p.localY}px`,
+                  opacity: p.fade,
+                }}
+              />
+              <div
+                className={styles.peakLabel}
+                style={{
+                  left: `${p.localX}px`,
+                  top:  `${p.localY}px`,
+                  opacity: showLabel ? p.fade : 0,
+                }}
+              >
+                <span className={styles.peakName}>{p.name}</span>
+                <span className={styles.peakElev}>{formatElevation(p.elevation_m, units)}</span>
+                <span className={styles.peakDist}>{formatPeakDistance(p.dist_km)}</span>
+              </div>
+            </React.Fragment>
+          )
+        })}
+      </div>
 
       {/* Scope ring */}
       <div className={styles.scopeRing} />

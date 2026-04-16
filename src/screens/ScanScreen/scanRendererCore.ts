@@ -111,6 +111,9 @@ export interface PeakScreenPos {
   lng:         number
   screenX:     number
   screenY:     number
+  /** Elevation angle from viewer, radians. Optional — used by B2 scope overlay
+   *  for horizon-pool ranking. ScanScreen ignores this field. */
+  peakAngle?:  number
 }
 
 export interface PrebuiltContourStrand {
