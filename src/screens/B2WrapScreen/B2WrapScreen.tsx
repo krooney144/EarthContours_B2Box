@@ -61,7 +61,8 @@ import {
   projectFirstPerson, isPeakVisible,
   skylineAngleAt, bandAngleAt,
   renderTerrain, renderContours,
-  drawSkyAndStars, drawHorizonGlow,
+  drawSkyAndStars,
+  generateStars, drawStars, type Star, type StarAngleSource,
   buildSilhouetteLayers, matchSilhouetteStrands,
   renderSilhouetteStrokes, renderSilhouetteGlow,
   buildVisibilityEnvelope,
@@ -170,6 +171,12 @@ const B2WrapScreen: React.FC = () => {
   const units = 'imperial' as const
 
   const canvasRef       = useRef<HTMLCanvasElement>(null)
+  // Stars are drawn on a transparent overlay canvas stacked above the terrain
+  // canvas. The overlay has its own RAF loop so stars twinkle independently
+  // of terrain redraws (which only fire when data changes).
+  const starsCanvasRef  = useRef<HTMLCanvasElement>(null)
+  const starsRafRef     = useRef<number>(0)
+  const starSourcesRef  = useRef<StarAngleSource[]>([])
   // Offscreen "base" canvas — sky/stars/terrain/contours/silhouette strokes.
   // No silhouette glow, no horizon glow. The scope reads from this canvas so
   // it never sees the magnified glow aliasing. The main wrap canvas composites
@@ -419,10 +426,7 @@ const B2WrapScreen: React.FC = () => {
       renderSilhouetteStrokes(mainCtx, silhouetteStrands, cam, silElevRange.min, silElevRange.max, silRes)
     }
 
-    // 4. Horizon glow (main wrap only).
-    drawHorizonGlow(mainCtx, cam)
-
-    // 5. Peak positions (computed for scope overlay).
+    // 4. Peak positions (computed for scope overlay).
     //    Two-pool selection: up to 25 nearest (<30 km) + up to 25 by elevation
     //    angle. Pass 1 is cheap (bearing/dist/angle per peak); pass 2 runs
     //    project + snap-to-ridgeline only for the union survivors (≤50).
@@ -532,6 +536,89 @@ const B2WrapScreen: React.FC = () => {
     rafRef.current = requestAnimationFrame(redrawCanvas)
     return () => cancelAnimationFrame(rafRef.current)
   }, [redrawCanvas])
+
+  // ── Background stars ────────────────────────────────────────────────────
+  // Two passes: bright "foreground" stars + dim "dust" that fills the sky
+  // with depth. Seeded so they're stable across the session.
+  const stars = useMemo<Star[]>(() => [
+    ...generateStars({ count: 350, seed: 1337, sizeMin: 1.0, sizeMax: 4.5, sizePower: 2.2, brightness: 1.0 }),
+    ...generateStars({ count: 350, seed: 7331, sizeMin: 1.2, sizeMax: 4.0, sizePower: 1.6, brightness: 0.9 }),
+  ], [])
+
+  // Per-azimuth max silhouette peakAngle. Silhouette layers are sorted by
+  // candidate distance, and `buildSilhouetteLayers` only pushes a layer
+  // when its peakAngle exceeds the running max — so the last layer at each
+  // azimuth IS the max. We precompute it into a Float32Array so the star
+  // RAF can do a single O(1) lookup per star.
+  const silhouetteMaxAngles = useMemo<Float32Array | null>(() => {
+    if (!silhouetteLayers || !skylineData?.silhouette) return null
+    const numAz = skylineData.silhouette.numAzimuths
+    const arr = new Float32Array(numAz)
+    arr.fill(-Math.PI / 2)
+    for (let ai = 0; ai < numAz; ai++) {
+      const layers = silhouetteLayers[ai]
+      if (!layers || layers.length === 0) continue
+      arr[ai] = layers[layers.length - 1].peakAngle
+    }
+    return arr
+  }, [silhouetteLayers, skylineData])
+
+  // Keep the latest terrain-angle sources in a ref so the star RAF can
+  // read current data without restarting on every AGL / location change.
+  // We pass BOTH silhouette-max and band-overall so whichever is stricter
+  // at a given azimuth wins.
+  useEffect(() => {
+    const sources: StarAngleSource[] = []
+    if (silhouetteMaxAngles && skylineData?.silhouette) {
+      sources.push({
+        angles:      silhouetteMaxAngles,
+        resolution:  skylineData.silhouette.resolution,
+        numAzimuths: skylineData.silhouette.numAzimuths,
+      })
+    }
+    if (projectedBands && skylineData) {
+      sources.push({
+        angles:      projectedBands.overallAngles,
+        resolution:  skylineData.resolution,
+        numAzimuths: skylineData.numAzimuths,
+      })
+    }
+    starSourcesRef.current = sources
+  }, [silhouetteMaxAngles, projectedBands, skylineData])
+
+  // Continuous RAF for star twinkle. Independent of the terrain redraw so
+  // each frame only clears + draws ~180 tiny arcs.
+  useEffect(() => {
+    const canvas = starsCanvasRef.current
+    if (!canvas) return
+    if (canvas.width !== WRAP_W || canvas.height !== WRAP_H) {
+      canvas.width  = WRAP_W
+      canvas.height = WRAP_H
+    }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const starCam: CameraParams = {
+      heading_deg: WRAP_HEADING,
+      pitch_deg:   WRAP_PITCH,
+      hfov:        WRAP_HFOV,
+      W:           WRAP_W,
+      H:           WRAP_H,
+    }
+
+    let cancelled = false
+    const tick = (tMs: number) => {
+      if (cancelled) return
+      ctx.clearRect(0, 0, WRAP_W, WRAP_H)
+      drawStars(ctx, stars, starCam, starSourcesRef.current, tMs / 1000)
+      starsRafRef.current = requestAnimationFrame(tick)
+    }
+    starsRafRef.current = requestAnimationFrame(tick)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(starsRafRef.current)
+    }
+  }, [stars])
 
   // ── Web Worker ──────────────────────────────────────────────────────────
 
@@ -846,6 +933,17 @@ const B2WrapScreen: React.FC = () => {
         <canvas
           ref={canvasRef}
           className={styles.terrainCanvas}
+          width={WRAP_W}
+          height={WRAP_H}
+        />
+
+        {/* ── STAR OVERLAY ────────────────────────────────────────────── */}
+        {/* Transparent canvas above the terrain; twinkling stars are     */}
+        {/* drawn here on their own RAF so terrain doesn't redraw         */}
+        {/* every frame. Pointer-events off so scopes still receive input. */}
+        <canvas
+          ref={starsCanvasRef}
+          className={styles.starsCanvas}
           width={WRAP_W}
           height={WRAP_H}
         />
