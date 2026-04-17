@@ -51,7 +51,7 @@ export const SCOPE_ZOOM = 2.0
 const LABEL_FULL_OPACITY_FRACTION = 0.7
 /** Crosshair-distance (fraction of radius) at which labels fully fade out.
  *  Labels fade in linearly between this and LABEL_FULL_OPACITY_FRACTION. */
-const LABEL_MAX_VISIBLE_FRACTION = 1.2
+const LABEL_MAX_VISIBLE_FRACTION = 0.9
 /** Maximum number of full labels rendered per scope (picked by priority). */
 const MAX_LABELS_PER_SCOPE = 10
 /** Minimum on-screen separation between accepted labels, in px. Below this,
@@ -186,7 +186,7 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
   const radius = diameter / 2
   const sourceRadius = diameter / (2 * SCOPE_ZOOM)
   // Accept peaks slightly beyond the scope edge so dots don't pop out at the rim.
-  const acceptRadius = sourceRadius * 1.2
+  const acceptRadius = sourceRadius
   const labelEligibilityRadius = radius * LABEL_MAX_VISIBLE_FRACTION
 
   type InScope = {

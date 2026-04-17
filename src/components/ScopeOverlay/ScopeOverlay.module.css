@@ -34,6 +34,8 @@
 .peakLayer {
   position: absolute;
   inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
   pointer-events: none;
 }
 
