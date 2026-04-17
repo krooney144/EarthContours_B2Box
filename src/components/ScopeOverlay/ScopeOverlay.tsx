@@ -38,7 +38,7 @@ export const SCOPE_LAYER_MAX = 8
 // FLAG: Adjust these to resize portals. Was 120/400, reduced for exhibit.
 export const SCOPE_SIZE_MIN_PX = 90
 /** Scope diameter in pixels at maximum layer_fraction */
-export const SCOPE_SIZE_MAX_PX = 350
+export const SCOPE_SIZE_MAX_PX = 410
 
 /** Magnification factor for the terrain inside the scope */
 export const SCOPE_ZOOM = 2.0
@@ -46,12 +46,17 @@ export const SCOPE_ZOOM = 2.0
 /** Fraction of the scope radius a peak must be within (to the crosshair) to
  *  be eligible for a label. Dots still draw for every peak inside the source
  *  region — this is only about when labels turn on. */
-const LABEL_ELIGIBILITY_FRACTION = 0.7
+/** Crosshair-distance (as fraction of scope radius) at which labels reach
+ *  full opacity. Closer than this = fully visible. */
+const LABEL_FULL_OPACITY_FRACTION = 0.7
+/** Crosshair-distance (fraction of radius) at which labels fully fade out.
+ *  Labels fade in linearly between this and LABEL_FULL_OPACITY_FRACTION. */
+const LABEL_MAX_VISIBLE_FRACTION = 1.2
 /** Maximum number of full labels rendered per scope (picked by priority). */
-const MAX_LABELS_PER_SCOPE = 5
+const MAX_LABELS_PER_SCOPE = 10
 /** Minimum on-screen separation between accepted labels, in px. Below this,
  *  the lower-priority label is dropped to prevent overlap stacks. */
-const LABEL_MIN_SEPARATION_PX = 60
+const LABEL_MIN_SEPARATION_PX = 90
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -180,7 +185,9 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
   const dispScaleY = containerH / wrapH
   const radius = diameter / 2
   const sourceRadius = diameter / (2 * SCOPE_ZOOM)
-  const labelEligibilityRadius = radius * LABEL_ELIGIBILITY_FRACTION
+  // Accept peaks slightly beyond the scope edge so dots don't pop out at the rim.
+  const acceptRadius = sourceRadius * 1.2
+  const labelEligibilityRadius = radius * LABEL_MAX_VISIBLE_FRACTION
 
   type InScope = {
     id: string
@@ -192,6 +199,7 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
     localY: number
     crosshairDist: number
     fade: number
+    labelOpacity: number
     priority: number
   }
   const inScope: InScope[] = []
@@ -201,7 +209,7 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
     const dx = peakDisplayX - x
     const dy = peakDisplayY - y
     const distFromTracker = Math.sqrt(dx * dx + dy * dy)
-    if (distFromTracker > sourceRadius) continue
+    if (distFromTracker > acceptRadius) continue
     // Position relative to the scope div (top-left = x-radius, y-radius).
     const localX = radius + dx * SCOPE_ZOOM
     const localY = radius + dy * SCOPE_ZOOM
@@ -210,6 +218,13 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
       (dy * SCOPE_ZOOM) * (dy * SCOPE_ZOOM),
     )
     const fade = Math.max(0, 1 - crosshairDist / radius)
+    // Label opacity ramps from 0 at LABEL_MAX_VISIBLE_FRACTION to 1 at
+    // LABEL_FULL_OPACITY_FRACTION; stays at 1 closer to the crosshair.
+    const frac = crosshairDist / radius
+    const labelOpacity = Math.max(0, Math.min(1,
+      (LABEL_MAX_VISIBLE_FRACTION - frac) /
+      (LABEL_MAX_VISIBLE_FRACTION - LABEL_FULL_OPACITY_FRACTION),
+    ))
     const peakAngle = p.peakAngle ?? 0
     const priority =
       0.7 * (1 - crosshairDist / radius) +
@@ -224,6 +239,7 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
       localY,
       crosshairDist,
       fade,
+      labelOpacity,
       priority,
     })
   }
@@ -279,7 +295,6 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
                 style={{
                   left: `${p.localX}px`,
                   top:  `${p.localY}px`,
-                  opacity: p.fade,
                 }}
               />
               <div
@@ -287,7 +302,7 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
                 style={{
                   left: `${p.localX}px`,
                   top:  `${p.localY}px`,
-                  opacity: showLabel ? p.fade : 0,
+                  opacity: showLabel ? p.labelOpacity : 0,
                 }}
               >
                 <span className={styles.peakName}>{p.name}</span>

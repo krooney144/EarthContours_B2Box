@@ -34,21 +34,19 @@
 .peakLayer {
   position: absolute;
   inset: 0;
-  border-radius: 50%;
-  overflow: hidden;
   pointer-events: none;
 }
 
 /* Small dot — always drawn for peaks inside the source region. */
 .peakDot {
   position: absolute;
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--ec-glow, #84D1DB);
-  box-shadow: 0 0 4px rgba(132, 209, 219, 0.7);
+  box-shadow: 0 0 6px rgba(132, 209, 219, 0.9);
   transform: translate(-50%, -50%);
-  transition: opacity 0.25s ease;
+  opacity: 1;
   pointer-events: none;
 }
 
@@ -56,37 +54,37 @@
    is at or above the midpoint size, capped at MAX_LABELS_PER_SCOPE. */
 .peakLabel {
   position: absolute;
-  transform: translate(8px, -50%);
+  transform: translate(12px, -50%);
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 3px 6px;
+  gap: 2px;
+  padding: 6px 10px;
   background: rgba(0, 8, 16, 0.65);
-  border-left: 1px solid rgba(132, 209, 219, 0.55);
-  border-radius: 2px;
+  border-left: 2px solid rgba(132, 209, 219, 0.55);
+  border-radius: 3px;
   font-family: 'SF Mono', 'Fira Code', monospace;
   color: var(--ec-glow, #84D1DB);
   text-shadow: 0 0 4px rgba(132, 209, 219, 0.5);
   white-space: nowrap;
   line-height: 1.15;
-  transition: opacity 0.25s ease;
+  transition: opacity 0.06s ease;
   pointer-events: none;
 }
 
 .peakName {
-  font-size: 11px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: 0.04em;
 }
 
 .peakElev {
-  font-size: 10px;
+  font-size: 20px;
   font-weight: 500;
   opacity: 0.88;
 }
 
 .peakDist {
-  font-size: 10px;
+  font-size: 20px;
   font-weight: 500;
   opacity: 0.75;
 }
