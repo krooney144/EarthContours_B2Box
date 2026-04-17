@@ -321,13 +321,10 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
       <div className={styles.crosshairH} />
       <div className={styles.crosshairV} />
 
-      {/* Distance readout */}
+      {/* Distance readout — hardcoded imperial for B2 exhibit audience */}
       {distanceKm !== null && (
         <div className={styles.distanceLabel}>
-          {distanceKm < 1
-            ? `${Math.round(distanceKm * 1000)}m`
-            : `${distanceKm.toFixed(1)}km`
-          }
+          {formatPeakDistance(distanceKm)}
         </div>
       )}
 

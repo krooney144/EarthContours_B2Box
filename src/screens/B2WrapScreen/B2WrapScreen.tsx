@@ -56,9 +56,9 @@ import {
   type VisibilityEnvelope,
   DEG_TO_RAD, EARTH_R, REFRACTION_K, MAX_PEAK_DIST,
   reprojectBands, reprojectRefinedArcs, buildContourStrands,
-  project,
+  project, getHorizonY,
   projectFirstPerson, isPeakVisible,
-  skylineAngleAt, bandAngleAt, bandDistAt,
+  skylineAngleAt, bandAngleAt,
   renderTerrain, renderContours,
   drawSkyAndStars, drawHorizonGlow,
   buildSilhouetteLayers, matchSilhouetteStrands,
@@ -121,33 +121,40 @@ function layerFractionToDiameter(layerFraction: number): number {
 }
 
 /**
- * Look up the distance to terrain at a given bearing from skyline band data.
- * Checks bands from nearest to farthest, returns the first band with valid data.
- * Returns distance in km, or null if no data.
+ * Fixed wrap camera for bearing/angle reverse-projection.
+ * Kept outside the component so reference equality doesn't churn memos.
  */
-function distanceAtBearing(
-  skyline: SkylineData,
-  bearingDeg: number,
-): number | null {
-  // Check bands from near (index 0) to far
-  for (let bi = 0; bi < skyline.bands.length; bi++) {
-    const dist = bandDistAt(skyline, bi, bearingDeg)
-    if (dist > 0) return dist / 1000 // metres → km
-  }
-  return null
+const WRAP_CAM: CameraParams = {
+  heading_deg: WRAP_HEADING,
+  pitch_deg:   WRAP_PITCH,
+  hfov:        WRAP_HFOV,
+  W:           WRAP_W,
+  H:           WRAP_H,
 }
+const WRAP_HORIZON_Y = getHorizonY(WRAP_CAM)
+const WRAP_PX_PER_RAD = WRAP_W / (WRAP_HFOV * DEG_TO_RAD)
 
 /**
- * Convert a screen X position on the wrap canvas to a bearing in degrees.
- * The wrap canvas is a 360° cylindrical projection with South (180°) at center.
+ * Look up distance to terrain at the point the crosshair is aimed at
+ * (bearing AND elevation angle). Finds the nearest silhouette layer whose
+ * peak elevation angle is at or above the crosshair — i.e. the first
+ * ridgeline the crosshair ray hits. Returns km, or null if aimed at sky.
  */
-function screenXToBearing(x: number, containerWidth: number): number {
-  // x=0 → left edge (North, 0°), x=containerWidth → right edge (North, 360°)
-  const fraction = x / containerWidth
-  // Left edge = heading - hfov/2 = 180 - 180 = 0 (North)
-  // Center = 180 (South)
-  // Right edge = heading + hfov/2 = 180 + 180 = 360 (North)
-  return fraction * 360
+function distanceAtCrosshair(
+  layers: SilhouetteLayer[][],
+  silResolution: number,
+  numAzimuths: number,
+  bearingDeg: number,
+  elevAngleRad: number,
+): number | null {
+  const ai = ((Math.round(bearingDeg * silResolution) % numAzimuths) + numAzimuths) % numAzimuths
+  const azLayers = layers[ai]
+  if (!azLayers || azLayers.length === 0) return null
+  // Layers are sorted near→far; first hit above the ray is the answer.
+  for (const layer of azLayers) {
+    if (layer.peakAngle >= elevAngleRad) return layer.dist / 1000
+  }
+  return null
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -156,7 +163,10 @@ const B2WrapScreen: React.FC = () => {
   const { height_m, setHeightFromSlider } = useCameraStore()
   const { activeLat, activeLng } = useLocationStore()
   const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
-  const { units, showBandLines, showFill, showSilhouetteLines, showPeakLabels } = useSettingsStore()
+  const { showBandLines, showFill, showSilhouetteLines, showPeakLabels } = useSettingsStore()
+  // B2 wrap is an exhibit display — audience expects imperial.
+  // Ignore the settings toggle and hard-code imperial for all audience-visible readouts.
+  const units = 'imperial' as const
 
   const canvasRef       = useRef<HTMLCanvasElement>(null)
   // Offscreen "base" canvas — sky/stars/terrain/contours/silhouette strokes.
@@ -292,23 +302,36 @@ const B2WrapScreen: React.FC = () => {
   const groundElev = skylineData ? skylineData.computedAt.groundElev : 0
 
   // ── Distance readout for scopes ───────────────────────────────────────────
-  // Convert each tracker's screen X to a bearing, then look up terrain distance.
+  // Reverse-project each tracker's (display x, y) through the fixed wrap
+  // camera to (bearing, elevation angle), then find the first silhouette
+  // layer the crosshair ray hits. This makes the number track what the
+  // audience actually sees at the crosshair, not just the horizontal bearing.
+
+  const scopeDistanceAt = useCallback((x: number, y: number): number | null => {
+    if (!skylineData || !silhouetteLayers || !skylineData.silhouette) return null
+    const containerEl = containerRef.current
+    const containerW = containerEl?.clientWidth  ?? WRAP_W
+    const containerH = containerEl?.clientHeight ?? WRAP_H
+    // Display → native canvas pixels.
+    const px = x * (WRAP_W / containerW)
+    const py = y * (WRAP_H / containerH)
+    // Native → bearing (deg) / elevation angle (rad).
+    const dBearingRad = (px - WRAP_W / 2) / WRAP_PX_PER_RAD
+    const bearing = ((WRAP_HEADING + dBearingRad / DEG_TO_RAD) % 360 + 360) % 360
+    const elevAngle = (WRAP_HORIZON_Y - py) / WRAP_PX_PER_RAD
+    const { resolution, numAzimuths } = skylineData.silhouette
+    return distanceAtCrosshair(silhouetteLayers, resolution, numAzimuths, bearing, elevAngle)
+  }, [skylineData, silhouetteLayers])
 
   const scope1Distance = useMemo<number | null>(() => {
-    if (!skylineData || !tracker1.visible) return null
-    const containerW = containerRef.current?.clientWidth ?? window.innerWidth
-    const bearing = screenXToBearing(tracker1.x, containerW)
-    const dist = distanceAtBearing(skylineData, bearing)
-    console.log('[SCOPE-1] bearing:', bearing.toFixed(1), 'dist:', dist, 'containerW:', containerW, 'x:', tracker1.x)
-    return dist
-  }, [skylineData, tracker1.x, tracker1.visible])
+    if (!tracker1.visible) return null
+    return scopeDistanceAt(tracker1.x, tracker1.y)
+  }, [scopeDistanceAt, tracker1.x, tracker1.y, tracker1.visible])
 
   const scope2Distance = useMemo<number | null>(() => {
-    if (!skylineData || !tracker2.visible) return null
-    const containerW = containerRef.current?.clientWidth ?? window.innerWidth
-    const bearing = screenXToBearing(tracker2.x, containerW)
-    return distanceAtBearing(skylineData, bearing)
-  }, [skylineData, tracker2.x, tracker2.visible])
+    if (!tracker2.visible) return null
+    return scopeDistanceAt(tracker2.x, tracker2.y)
+  }, [scopeDistanceAt, tracker2.x, tracker2.y, tracker2.visible])
 
   // ── Canvas draw ─────────────────────────────────────────────────────────
 
