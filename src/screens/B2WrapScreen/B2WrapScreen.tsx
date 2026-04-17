@@ -851,7 +851,7 @@ const B2WrapScreen: React.FC = () => {
         {/* view itself shows zero peak labels.                           */}
         <ScopeOverlay
           x={tracker1.x} y={tracker1.y}
-          visible={tracker1.visible}
+          visible={tracker1.visible && tracker1.y >= 0 && tracker1.y <= window.innerHeight}
           diameter={tracker1.diameter}
           canvasRef={baseCanvasRef}
           distanceKm={scope1Distance}
@@ -861,7 +861,7 @@ const B2WrapScreen: React.FC = () => {
         />
         <ScopeOverlay
           x={tracker2.x} y={tracker2.y}
-          visible={tracker2.visible}
+          visible={tracker2.visible && tracker2.y >= 0 && tracker2.y <= window.innerHeight}
           diameter={tracker2.diameter}
           canvasRef={baseCanvasRef}
           distanceKm={scope2Distance}
