@@ -47,6 +47,7 @@ import { createLogger } from '../../core/logger'
 import { MAX_HEIGHT_M, MIN_HEIGHT_M } from '../../core/constants'
 import { formatElevation, metersToFeet } from '../../core/utils'
 import { fetchPeaksNear } from '../../data/peakLoader'
+import { fetchPlaceName } from '../../data/locationNameLoader'
 import { getPeaksInBounds } from '../../data/peakDatabase'
 import type { Peak, SkylineData, RefinedArc, PeakRefineItem, SilhouetteLayer } from '../../core/types'
 import { DEPTH_BANDS } from '../../core/types'
@@ -189,6 +190,7 @@ const B2WrapScreen: React.FC = () => {
   const [refinedArcs, setRefinedArcs]               = useState<RefinedArc[]>([])
   const [osmPeaks, setOsmPeaks]                     = useState<Peak[]>([])
   const [peakPositions, setPeakPositions]           = useState<PeakScreenPos[]>([])
+  const [placeName, setPlaceName]                   = useState<string | null>(null)
 
   // ─── TRACKER PORTAL STATE ────────────────────────────────────────────────
   // These track the positions of motion capture trackers from OSC.
@@ -609,6 +611,21 @@ const B2WrapScreen: React.FC = () => {
     return () => { cancelled = true }
   }, [activeLat, activeLng])
 
+  // ── Reverse-geocode current location to a human-readable name ──────────
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      fetchPlaceName(activeLat, activeLng).then((name) => {
+        if (!cancelled) setPlaceName(name)
+      })
+    }, 500)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [activeLat, activeLng])
+
   // ── Peak refinement (second pass) ───────────────────────────────────────
 
   useEffect(() => {
@@ -928,6 +945,12 @@ const B2WrapScreen: React.FC = () => {
 
         {/* Coordinate overlay — bottom center, under South */}
         <div className={styles.coordOverlay}>
+          {placeName && (
+            <div className={styles.placeNameRow}>
+              <span className={styles.placeName}>{placeName}</span>
+            </div>
+          )}
+          <div className={styles.coordRow}>
           <div className={styles.coordItem}>
             <span className={styles.coordLabel}>LAT</span>
             <span className={styles.coordValue}>{activeLat.toFixed(4)}°</span>
@@ -947,14 +970,7 @@ const B2WrapScreen: React.FC = () => {
             <span className={styles.coordLabel}>AGL</span>
             <span className={styles.coordValue}>{formatElevation(height_m, units)}</span>
           </div>
-          {skylineData && (
-            <>
-              <div className={styles.coordDivider} />
-              <div className={styles.coordItem}>
-                <span className={`${styles.coordValue} ${styles.coordReady}`}>360° READY</span>
-              </div>
-            </>
-          )}
+          </div>
         </div>
       </div>
     </div>
