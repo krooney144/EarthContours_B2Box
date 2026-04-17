@@ -429,15 +429,15 @@ const B2WrapScreen: React.FC = () => {
         meta.push({ peak: p, bearing, horizDist, peakAngle })
       }
 
-      // Near pool: peaks within 30 km, sorted by distance ascending, top 25.
+      // Near pool: peaks within 30 km, sorted by distance ascending, top 50.
       const nearPool = meta
         .filter(m => m.horizDist < 30_000)
         .sort((a, b) => a.horizDist - b.horizDist)
-        .slice(0, 25)
-      // Horizon pool: sorted by elevation angle descending, top 25.
+        .slice(0, 50)
+      // Horizon pool: sorted by elevation angle descending, top 50.
       const horizonPool = [...meta]
         .sort((a, b) => b.peakAngle - a.peakAngle)
-        .slice(0, 25)
+        .slice(0, 50)
 
       // Union by id (first-seen order).
       const seen = new Set<string>()
