@@ -689,7 +689,15 @@ async function computeSkyline(req: SkylineRequest): Promise<void> {
 
   // ── Ground elevation from Z15 tiles (~10m resolution) ────────────────────
   // Tiles are already prefetched above, so sampleBest will hit the cache.
-  const tileGround = sampleBest(viewerLat, viewerLng, 15)
+  // If z15 returns 0 (tile fetch failed or sea level), fall back to z14
+  // which is prefetched out to 4.5 km — always available for any land point.
+  const z15Ground = sampleBest(viewerLat, viewerLng, 15)
+  const tileGround = z15Ground > 0 ? z15Ground : sampleBest(viewerLat, viewerLng, 14)
+  if (z15Ground === 0) {
+    console.warn('[SKYLINE] z15 returned 0 — falling back to z14', {
+      viewerLat, viewerLng, z14Value: tileGround,
+    })
+  }
   const correctedViewerElev = tileGround + viewerHeightM
 
   // ── Phase 2: Build log-step distance arrays ─────────────────────────────────

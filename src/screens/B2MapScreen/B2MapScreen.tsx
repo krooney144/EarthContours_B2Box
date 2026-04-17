@@ -121,12 +121,18 @@ const SELECT_COOLDOWN_MS = 30_000
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface HandTracker {
-  x: number        // Design-space pixel position from left edge (0–DESIGN_W)
-  y: number        // Design-space pixel position from top edge (0–DESIGN_H)
-  state: HandState // 'open' | 'closed' | 'pointing'
-  hand: HandSide   // 'left' | 'right'
-  visible: boolean // Whether this hand is currently detected
+  x: number          // Design-space pixel position from left edge (0–DESIGN_W)
+  y: number          // Design-space pixel position from top edge (0–DESIGN_H)
+  isGrabbing: boolean // /hN:ILoveYou >= GRAB_THRESHOLD — only the ILoveYou handler writes this
+  isPointing: boolean // /hN:Pointing_Up >= POINT_THRESHOLD — only the Pointing_Up handler writes this
+  hand: HandSide     // 'left' | 'right'
+  visible: boolean   // Whether this hand is currently detected
 }
+
+// Derive the visible cursor state from the two independent gesture flags.
+// Pointing wins over grabbing; neither → open palm.
+const deriveHandState = (h: HandTracker): HandState =>
+  h.isPointing ? 'pointing' : h.isGrabbing ? 'closed' : 'open'
 
 type HoldPhase = 'idle' | 'holding' | 'cooldown'
 
@@ -187,11 +193,11 @@ const B2MapScreen: React.FC = () => {
   //   only changes the one field we care about.
 
   const [hand1, setHand1] = useState<HandTracker>({
-    x: 0, y: 0, state: 'open', hand: 'right', visible: false,
+    x: 0, y: 0, isGrabbing: false, isPointing: false, hand: 'right', visible: false,
   })
 
   const [hand2, setHand2] = useState<HandTracker>({
-    x: 0, y: 0, state: 'open', hand: 'left', visible: false,
+    x: 0, y: 0, isGrabbing: false, isPointing: false, hand: 'left', visible: false,
   })
 
   // ─── SIM MODE (default OFF) ─────────────────────────────────────────────
@@ -484,7 +490,7 @@ const B2MapScreen: React.FC = () => {
     const h1 = hand1Ref.current
     const h2 = hand2Ref.current
 
-    const bothFists = h1.state === 'closed' && h2.state === 'closed'
+    const bothFists = h1.isGrabbing && h2.isGrabbing
       && h1.visible && h2.visible
 
     if (bothFists) {
@@ -525,7 +531,7 @@ const B2MapScreen: React.FC = () => {
       if (msg.address === '/h1tx') {
         const xDesign = (1 - msg.args[0]) * DESIGN_W
         setHand1(prev => {
-          if (prev.state === 'closed') handleFistGesture(1, xDesign, prev.y)
+          if (prev.isGrabbing) handleFistGesture(1, xDesign, prev.y)
           return { ...prev, x: xDesign, visible: true }
         })
       }
@@ -533,7 +539,7 @@ const B2MapScreen: React.FC = () => {
       if (msg.address === '/h1ty') {
         const yDesign = (1 - msg.args[0]) * DESIGN_H
         setHand1(prev => {
-          if (prev.state === 'closed') handleFistGesture(1, prev.x, yDesign)
+          if (prev.isGrabbing) handleFistGesture(1, prev.x, yDesign)
           return { ...prev, y: yDesign, visible: true }
         })
       }
@@ -542,7 +548,7 @@ const B2MapScreen: React.FC = () => {
       if (msg.address === '/h2tx') {
         const xDesign = (1 - msg.args[0]) * DESIGN_W
         setHand2(prev => {
-          if (prev.state === 'closed') handleFistGesture(2, xDesign, prev.y)
+          if (prev.isGrabbing) handleFistGesture(2, xDesign, prev.y)
           return { ...prev, x: xDesign, visible: true }
         })
       }
@@ -550,32 +556,39 @@ const B2MapScreen: React.FC = () => {
       if (msg.address === '/h2ty') {
         const yDesign = (1 - msg.args[0]) * DESIGN_H
         setHand2(prev => {
-          if (prev.state === 'closed') handleFistGesture(2, prev.x, yDesign)
+          if (prev.isGrabbing) handleFistGesture(2, prev.x, yDesign)
           return { ...prev, y: yDesign, visible: true }
         })
       }
 
       // ── Hand 1 gesture: ILoveYou = grab (pan / pinch-zoom) ─────────────
+      // Writes ONLY isGrabbing — never touches isPointing so the two gestures
+      // cannot clobber each other on frames where MediaPipe emits both.
       if (msg.address === '/h1:ILoveYou') {
         const confidence = msg.args[0] ?? 0
         const grabActive = confidence >= GRAB_THRESHOLD
         if (!grabActive) lastFistPosRef.current = null
-        setHand1(prev => ({ ...prev, state: grabActive ? 'closed' : 'open' }))
+        setHand1(prev => {
+          if (prev.isGrabbing !== grabActive) {
+            console.log('[HAND-1] grab', { from: prev.isGrabbing, to: grabActive, confidence: confidence.toFixed(2) })
+          }
+          return { ...prev, isGrabbing: grabActive }
+        })
       }
 
       // ── Hand 1 gesture: Pointing_Up = hold-to-select ───────────────────
-      // Leading edge (confidence rises above threshold) → startHold
-      // Trailing edge (falls below threshold)            → releaseHold (grace)
+      // Writes ONLY isPointing. Leading edge (false→true) starts the hold,
+      // trailing edge (true→false) releases it.
       if (msg.address === '/h1:Pointing_Up') {
         const confidence = msg.args[0] ?? 0
         const pointActive = confidence >= POINT_THRESHOLD
         setHand1(prev => {
-          if (pointActive && prev.state !== 'pointing') {
-            startHold(1, prev.x, prev.y)
-          } else if (!pointActive && prev.state === 'pointing') {
-            releaseHold(1)
+          if (prev.isPointing !== pointActive) {
+            console.log('[HAND-1] point', { from: prev.isPointing, to: pointActive, confidence: confidence.toFixed(2) })
+            if (pointActive) startHold(1, prev.x, prev.y)
+            else releaseHold(1)
           }
-          return { ...prev, state: pointActive ? 'pointing' : 'open' }
+          return { ...prev, isPointing: pointActive }
         })
       }
 
@@ -584,7 +597,12 @@ const B2MapScreen: React.FC = () => {
         const confidence = msg.args[0] ?? 0
         const grabActive = confidence >= GRAB_THRESHOLD
         if (!grabActive) lastPinchDistRef.current = null
-        setHand2(prev => ({ ...prev, state: grabActive ? 'closed' : 'open' }))
+        setHand2(prev => {
+          if (prev.isGrabbing !== grabActive) {
+            console.log('[HAND-2] grab', { from: prev.isGrabbing, to: grabActive, confidence: confidence.toFixed(2) })
+          }
+          return { ...prev, isGrabbing: grabActive }
+        })
       }
 
       // ── Hand 2 gesture: Pointing_Up = hold-to-select ───────────────────
@@ -592,12 +610,12 @@ const B2MapScreen: React.FC = () => {
         const confidence = msg.args[0] ?? 0
         const pointActive = confidence >= POINT_THRESHOLD
         setHand2(prev => {
-          if (pointActive && prev.state !== 'pointing') {
-            startHold(2, prev.x, prev.y)
-          } else if (!pointActive && prev.state === 'pointing') {
-            releaseHold(2)
+          if (prev.isPointing !== pointActive) {
+            console.log('[HAND-2] point', { from: prev.isPointing, to: pointActive, confidence: confidence.toFixed(2) })
+            if (pointActive) startHold(2, prev.x, prev.y)
+            else releaseHold(2)
           }
-          return { ...prev, state: pointActive ? 'pointing' : 'open' }
+          return { ...prev, isPointing: pointActive }
         })
       }
     })
@@ -665,7 +683,7 @@ const B2MapScreen: React.FC = () => {
       if (!simMode) return
       const { x, y } = toDesign(e.clientX, e.clientY)
       setHand1(prev => {
-        if (prev.state === 'closed') handleFistGesture(1, x, y)
+        if (prev.isGrabbing) handleFistGesture(1, x, y)
         return { ...prev, x, y, visible: true }
       })
     }
@@ -673,30 +691,37 @@ const B2MapScreen: React.FC = () => {
     const handleMouseDown = (e: MouseEvent) => {
       if (!simMode) return
       if (e.button === 0) {
-        // Left button = fist (pan)
-        setHand1(prev => ({ ...prev, state: 'closed' }))
+        // Left button = fist (pan) — sets isGrabbing only
+        setHand1(prev => {
+          if (!prev.isGrabbing) console.log('[HAND-1] grab', { from: false, to: true, source: 'sim' })
+          return { ...prev, isGrabbing: true }
+        })
       }
     }
 
     const handleMouseUp = (e: MouseEvent) => {
       if (!simMode) return
       if (e.button === 0) {
-        // Left release = back to open palm, stop pan
+        // Left release = stop pan — clears isGrabbing only
         lastFistPosRef.current = null
-        setHand1(prev => ({ ...prev, state: 'open' }))
+        setHand1(prev => {
+          if (prev.isGrabbing) console.log('[HAND-1] grab', { from: true, to: false, source: 'sim' })
+          return { ...prev, isGrabbing: false }
+        })
       }
     }
 
     const handleContextMenu = (e: MouseEvent) => {
       if (!simMode) return
       e.preventDefault()
-      // Right click down = start pointing hold
+      // Right click down = start pointing hold — sets isPointing only
       const { x, y } = toDesign(e.clientX, e.clientY)
       setHand1(prev => {
-        if (prev.state !== 'pointing') {
+        if (!prev.isPointing) {
+          console.log('[HAND-1] point', { from: false, to: true, source: 'sim' })
           startHold(1, x, y)
         }
-        return { ...prev, x, y, state: 'pointing', visible: true }
+        return { ...prev, x, y, isPointing: true, visible: true }
       })
     }
 
@@ -707,10 +732,11 @@ const B2MapScreen: React.FC = () => {
       if (!simMode) return
       if (e.button !== 2) return
       setHand1(prev => {
-        if (prev.state === 'pointing') {
+        if (prev.isPointing) {
+          console.log('[HAND-1] point', { from: true, to: false, source: 'sim' })
           releaseHold(1)
         }
-        return { ...prev, state: 'open' }
+        return { ...prev, isPointing: false }
       })
     }
 
@@ -804,14 +830,14 @@ const B2MapScreen: React.FC = () => {
       {/*   pointing= finger icon (hold 2s to select)                         */}
       <HandCursor
         x={hand1.x} y={hand1.y}
-        state={hand1.state} hand={hand1.hand}
+        state={deriveHandState(hand1)} hand={hand1.hand}
         visible={hand1.visible}
       />
 
       {/* Hand 2 (left hand by default) */}
       <HandCursor
         x={hand2.x} y={hand2.y}
-        state={hand2.state} hand={hand2.hand}
+        state={deriveHandState(hand2)} hand={hand2.hand}
         visible={hand2.visible}
       />
 
