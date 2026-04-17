@@ -882,7 +882,9 @@ export function isPeakVisible(
   return false
 }
 
-// ─── Sky Gradient + Stars ───────────────────────────────────────────────────
+// ─── Sky Gradient ───────────────────────────────────────────────────────────
+// Gradient is black top → black through the horizon zone → slow fade to a
+// deep ocean blue at the bottom. No horizon line, no baked-in stars.
 
 export function drawSkyAndStars(
   ctx: CanvasRenderingContext2D,
@@ -890,30 +892,146 @@ export function drawSkyAndStars(
   H: number,
 ): void {
   const skyGrad = ctx.createLinearGradient(0, 0, 0, H)
-  skyGrad.addColorStop(0,    '#000810')
-  skyGrad.addColorStop(0.20, '#020c18')
-  skyGrad.addColorStop(0.50, '#051520')
-  skyGrad.addColorStop(0.78, '#071a2a')
-  skyGrad.addColorStop(0.90, '#0c2235')
+  skyGrad.addColorStop(0,    '#000000')
+  skyGrad.addColorStop(0.50, '#000000')
+  skyGrad.addColorStop(0.65, '#030a14')
+  skyGrad.addColorStop(0.82, '#071a2a')
   skyGrad.addColorStop(1.0,  '#0f2c42')
   ctx.fillStyle = skyGrad
   ctx.fillRect(0, 0, W, H)
+}
 
-  ctx.save()
-  ctx.globalAlpha = 0.35
-  const starRng = { seed: 42 }
-  const rand = () => { starRng.seed = (starRng.seed * 16807 + 0) & 0x7fffffff; return starRng.seed / 0x7fffffff }
-  const starLimit = Math.round(H * 0.45)
-  for (let s = 0; s < 80; s++) {
-    const sx = rand() * W
-    const sy = rand() * starLimit
-    const sr = rand() * 0.8 + 0.3
-    ctx.fillStyle = `rgba(167, 221, 229, ${0.3 + rand() * 0.5})`
+// ─── Background Stars ───────────────────────────────────────────────────────
+// Stars live in (bearing, elevation angle) space so they stay fixed to the
+// sky as AGL changes. `generateStars` produces a stable list (seeded RNG);
+// `drawStars` is called each frame with the current time and current
+// per-azimuth ridge maxes, and hides/fades any star whose local ridge is
+// within the buffer. All stars live above the horizon (elev > 0).
+
+export interface Star {
+  bearingDeg:   number
+  elevAngleRad: number
+  size:         number   // radius in canvas pixels at scale=1
+  r:            number
+  g:            number
+  b:            number
+  twinkleRate:  number   // rad/sec
+  twinklePhase: number
+  brightness:   number   // 0..1 base-alpha multiplier (dim pass < bright pass)
+}
+
+export interface StarPassOpts {
+  count:      number
+  seed?:      number
+  sizeMin?:   number
+  sizeMax?:   number
+  sizePower?: number   // higher = more small stars
+  brightness?: number  // 0..1
+}
+
+const STAR_PALETTE: [number, number, number][] = [
+  [255, 255, 255],  // white
+  [240, 246, 255],  // near-white
+  [210, 228, 245],  // pale blue
+  [178, 214, 232],  // ec-foam-ish
+  [167, 221, 229],  // ec-reef
+  [132, 209, 219],  // ec-glow
+]
+
+export function generateStars(opts: StarPassOpts): Star[] {
+  const {
+    count,
+    seed       = 1337,
+    sizeMin    = 1.0,
+    sizeMax    = 4.5,
+    sizePower  = 2.2,
+    brightness = 1,
+  } = opts
+  let s = seed >>> 0
+  const rand = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0xffffffff }
+  const stars: Star[] = []
+  for (let i = 0; i < count; i++) {
+    const bearingDeg = rand() * 360
+    const raw = Math.pow(rand(), 0.9)
+    const elevAngleRad = (3 + raw * 79) * DEG_TO_RAD
+    const size = sizeMin + Math.pow(rand(), sizePower) * (sizeMax - sizeMin)
+    const [r, g, b] = STAR_PALETTE[Math.floor(rand() * STAR_PALETTE.length)]
+    const twinkleRate  = 0.25 + rand() * 0.9
+    const twinklePhase = rand() * Math.PI * 2
+    stars.push({ bearingDeg, elevAngleRad, size, r, g, b, twinkleRate, twinklePhase, brightness })
+  }
+  return stars
+}
+
+export interface StarAngleSource {
+  angles:      Float32Array
+  resolution:  number   // samples per degree
+  numAzimuths: number
+}
+
+export function drawStars(
+  ctx: CanvasRenderingContext2D,
+  stars: Star[],
+  cam: CameraParams,
+  sources: StarAngleSource[],
+  timeSec: number,
+): void {
+  const { W } = cam
+  const horizonY = getHorizonY(cam)
+  const scale = cam.scale ?? 1
+
+  const FADE_MIN_RAD = 1.0 * DEG_TO_RAD
+  const FADE_MAX_RAD = 4.0 * DEG_TO_RAD
+  const SENTINEL = -Math.PI / 2 + 0.001
+
+  // Sample one source by bearing (linear interp across neighbouring buckets,
+  // mirroring how renderTerrain reads the same array).
+  const sample = (src: StarAngleSource, bearingDeg: number): number => {
+    const normB = ((bearingDeg % 360) + 360) % 360
+    const fracIdx = normB * src.resolution
+    const idx0 = Math.floor(fracIdx) % src.numAzimuths
+    const idx1 = (idx0 + 1) % src.numAzimuths
+    const t = fracIdx - Math.floor(fracIdx)
+    const a0 = src.angles[idx0]
+    const a1 = src.angles[idx1]
+    if (a0 > SENTINEL && a1 > SENTINEL) return a0 * (1 - t) + a1 * t
+    if (a0 > SENTINEL) return a0
+    if (a1 > SENTINEL) return a1
+    return -Math.PI / 2
+  }
+
+  for (let i = 0; i < stars.length; i++) {
+    const st = stars[i]
+
+    // ── Max terrain angle at this star's bearing ──
+    // Take the max across all supplied sources (silhouette + overall bands)
+    // so whichever one reports taller terrain at this azimuth wins.
+    let maxRidge = -Math.PI / 2
+    for (let s = 0; s < sources.length; s++) {
+      const a = sample(sources[s], st.bearingDeg)
+      if (a > maxRidge) maxRidge = a
+    }
+
+    const margin = st.elevAngleRad - maxRidge
+    if (margin < FADE_MIN_RAD) continue
+
+    const fadeT = margin >= FADE_MAX_RAD
+      ? 1
+      : (margin - FADE_MIN_RAD) / (FADE_MAX_RAD - FADE_MIN_RAD)
+
+    const tw = 0.6 + 0.4 * Math.sin(timeSec * st.twinkleRate + st.twinklePhase)
+    const alpha = fadeT * (0.25 + 0.75 * tw) * st.brightness
+    if (alpha < 0.02) continue
+
+    const { x, y } = project(st.bearingDeg, st.elevAngleRad, cam)
+    if (y < 0 || y > horizonY - 1) continue
+    if (x < 0 || x > W) continue
+
+    ctx.fillStyle = `rgba(${st.r},${st.g},${st.b},${alpha.toFixed(3)})`
     ctx.beginPath()
-    ctx.arc(sx, sy, sr, 0, Math.PI * 2)
+    ctx.arc(x, y, st.size * scale, 0, Math.PI * 2)
     ctx.fill()
   }
-  ctx.restore()
 }
 
 // ─── Horizon Glow ───────────────────────────────────────────────────────────
