@@ -224,12 +224,21 @@ export function buildContourStrands(
 
     const maxAzGap = Math.ceil(bandRes * 2)
 
-    const activeStrands = new Map<string, Array<{
+    type ActiveStrand = {
       lastAi:   number
       lastDist: number
       level:    number
+      levelKey: string
       points:   Array<{ bearingDeg: number; elevAngleRad: number; dist: number }>
-    }>>()
+    }
+    const activeStrands = new Map<string, ActiveStrand[]>()
+
+    // Per-band completed list — populated during this band's sweep and
+    // post-merged at the bottom (stitching strands that terminate near
+    // bearing 360° with strands that begin near bearing 0°, so contour
+    // lines connect across the 0°/360° wrap that sits at centre screen
+    // on the 360° B2 wrap view).
+    const bandCompleted: Array<ActiveStrand> = []
 
     for (let ai = 0; ai < bandAz; ai++) {
       const start = offsets[ai]
@@ -309,6 +318,7 @@ export function buildContourStrands(
               lastAi: ai,
               lastDist: c.dist,
               level: snappedLevel,
+              levelKey,
               points: [{ bearingDeg, elevAngleRad: angle, dist: c.dist }],
             })
           }
@@ -320,9 +330,7 @@ export function buildContourStrands(
           const remaining: typeof strands = []
           for (const s of strands) {
             if (ai - s.lastAi > maxAzGap) {
-              if (s.points.length >= 2) {
-                completed.push({ level: s.level, bandIdx: bi, interval, points: s.points })
-              }
+              if (s.points.length >= 2) bandCompleted.push(s)
             } else {
               remaining.push(s)
             }
@@ -335,10 +343,51 @@ export function buildContourStrands(
 
     for (const [, strands] of activeStrands) {
       for (const s of strands) {
-        if (s.points.length >= 2) {
-          completed.push({ level: s.level, bandIdx: bi, interval, points: s.points })
+        if (s.points.length >= 2) bandCompleted.push(s)
+      }
+    }
+
+    // ── Post-merge: stitch strands across the 0°/360° azimuth wrap ──
+    // For each level+direction bucket, join any strand whose last point sits
+    // near 360° with any strand whose first point sits near 0°, provided their
+    // distances at the join match within the same tolerance used during the
+    // main-loop match. Greedy, single pass.
+    const WRAP_TAIL_DEG = 2     // last point must be within 2° of 360
+    const WRAP_HEAD_DEG = 2     // first point must be within 2° of 0
+    const buckets = new Map<string, ActiveStrand[]>()
+    for (const s of bandCompleted) {
+      let arr = buckets.get(s.levelKey)
+      if (!arr) { arr = []; buckets.set(s.levelKey, arr) }
+      arr.push(s)
+    }
+    const merged = new Set<ActiveStrand>()
+    for (const arr of buckets.values()) {
+      const tails = arr.filter(s => s.points[s.points.length - 1].bearingDeg >= 360 - WRAP_TAIL_DEG)
+      const heads = arr.filter(s => s.points[0].bearingDeg <= WRAP_HEAD_DEG)
+      for (const a of tails) {
+        if (merged.has(a)) continue
+        const aLastDist = a.points[a.points.length - 1].dist
+        const tol = bi <= 1
+          ? Math.max(10, aLastDist * 0.02)
+          : bi === 2
+          ? Math.max(50, aLastDist * 0.03)
+          : Math.max(200, aLastDist * 0.05)
+        let bestB: ActiveStrand | null = null
+        let bestDiff = Infinity
+        for (const b of heads) {
+          if (b === a || merged.has(b)) continue
+          const diff = Math.abs(aLastDist - b.points[0].dist)
+          if (diff < bestDiff && diff < tol) { bestB = b; bestDiff = diff }
+        }
+        if (bestB) {
+          for (const pt of bestB.points) a.points.push(pt)
+          merged.add(bestB)
         }
       }
+    }
+    for (const s of bandCompleted) {
+      if (merged.has(s)) continue
+      completed.push({ level: s.level, bandIdx: bi, interval, points: s.points })
     }
   }
 
@@ -758,6 +807,12 @@ export function renderContours(
 
     let pathStarted = false
     let currentWidth = 0
+    // Track last projected x to detect seam jumps — when consecutive
+    // points span more than half the canvas, they've crossed the
+    // ±hfov/2 wrap boundary (e.g. bearing 180° at both edges on the
+    // 360° wrap view). Break the path instead of drawing across it.
+    let prevX = 0
+    const SEAM_JUMP = W * 0.5
 
     for (let i = 0; i < strand.points.length; i++) {
       const pt = strand.points[i]
@@ -790,6 +845,12 @@ export function renderContours(
         continue
       }
 
+      // Seam break: huge x jump means we crossed the panorama wrap.
+      if (pathStarted && Math.abs(x - prevX) > SEAM_JUMP) {
+        ctx.stroke()
+        pathStarted = false
+      }
+
       const tDist = Math.min(1, pt.dist / MAX_D)
       const lw = WIDTH_MIN + WIDTH_RANGE * (1 - Math.pow(tDist, WIDTH_POWER))
 
@@ -809,6 +870,7 @@ export function renderContours(
       } else {
         ctx.lineTo(x, y)
       }
+      prevX = x
     }
 
     if (pathStarted) ctx.stroke()
@@ -1438,6 +1500,7 @@ export function renderSilhouetteGlow(
       }
 
       // Draw 3 glow passes over the same projected path
+      const SEAM_JUMP_GLOW = cam.W * 0.5
       for (const pass of passes) {
         const passWidth = baseGlowWidth * pass.widthMul
         const passAlpha = glowAlpha * pass.alphaMul
@@ -1446,6 +1509,7 @@ export function renderSilhouetteGlow(
         ctx.strokeStyle = `rgba(${gr},${gg},${gb},${passAlpha.toFixed(3)})`
         ctx.beginPath()
         let started = false
+        let prevXGlow = 0
 
         for (let j = 0; j < projected.length; j++) {
           const pt = projected[j]
@@ -1454,17 +1518,26 @@ export function renderSilhouetteGlow(
             continue
           }
 
+          if (started && Math.abs(pt.x - prevXGlow) > SEAM_JUMP_GLOW) {
+            ctx.stroke()
+            ctx.beginPath()
+            started = false
+          }
+
           const yShifted = pt.y + pass.yOff
 
           if (!started) {
             ctx.moveTo(pt.x, yShifted)
             started = true
-          } else if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+          } else if (j + 1 < projected.length
+                     && projected[j + 1].y > -9000
+                     && Math.abs(projected[j + 1].x - pt.x) <= SEAM_JUMP_GLOW) {
             const next = projected[j + 1]
             ctx.quadraticCurveTo(pt.x, yShifted, (pt.x + next.x) / 2, (yShifted + next.y + pass.yOff) / 2)
           } else {
             ctx.lineTo(pt.x, yShifted)
           }
+          prevXGlow = pt.x
         }
         if (started) ctx.stroke()
       }
@@ -1586,12 +1659,22 @@ export function renderSilhouetteStrokes(
       // Draw smooth curves through valid points
       let pathStarted = false
       const SEG_SIZE = 8  // Update color/width every 8 points
+      // Seam-jump threshold — a jump greater than half the canvas means
+      // the strand crossed the panorama wrap (e.g. bearing 180° at both
+      // edges on the 360° B2 wrap view). Break the path there.
+      const SEAM_JUMP_SIL = cam.W * 0.5
+      let prevX = 0
 
       for (let j = 0; j < projected.length; j++) {
         const pt = projected[j]
         if (pt.y < -9000) {
           if (pathStarted) { ctx.stroke(); pathStarted = false }
           continue
+        }
+
+        if (pathStarted && Math.abs(pt.x - prevX) > SEAM_JUMP_SIL) {
+          ctx.stroke()
+          pathStarted = false
         }
 
         if (!pathStarted) {
@@ -1616,21 +1699,27 @@ export function renderSilhouetteStrokes(
           ctx.lineWidth = lineWidth
           ctx.strokeStyle = elevToRidgeColor(tElev)
           ctx.moveTo(projected[j - 1].x, projected[j - 1].y)
-          // quadraticCurveTo to this point via midpoint
-          if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+          // quadraticCurveTo to this point via midpoint — unless next is
+          // across the panorama seam, in which case terminate at this pt.
+          if (j + 1 < projected.length
+              && projected[j + 1].y > -9000
+              && Math.abs(projected[j + 1].x - pt.x) <= SEAM_JUMP_SIL) {
             const next = projected[j + 1]
             ctx.quadraticCurveTo(pt.x, pt.y, (pt.x + next.x) / 2, (pt.y + next.y) / 2)
           } else {
             ctx.lineTo(pt.x, pt.y)
           }
-        } else if (j + 1 < projected.length && projected[j + 1].y > -9000) {
+        } else if (j + 1 < projected.length
+                   && projected[j + 1].y > -9000
+                   && Math.abs(projected[j + 1].x - pt.x) <= SEAM_JUMP_SIL) {
           // Smooth curve: control=current, end=midpoint to next
           const next = projected[j + 1]
           ctx.quadraticCurveTo(pt.x, pt.y, (pt.x + next.x) / 2, (pt.y + next.y) / 2)
         } else {
-          // Last valid point or next is invalid: line to exact position
+          // Last valid point, next is invalid, or next is across the seam.
           ctx.lineTo(pt.x, pt.y)
         }
+        prevX = pt.x
       }
       if (pathStarted) ctx.stroke()
     }

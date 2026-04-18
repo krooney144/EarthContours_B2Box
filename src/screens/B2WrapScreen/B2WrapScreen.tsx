@@ -2,8 +2,8 @@
  * B2 Wrap Screen — 360° Cylindrical Projection Surface
  *
  * Renders a full 360° panorama on a 10880×1080 canvas for cylindrical
- * projection in the B2 venue. South is centered (pixel ~5440), North is
- * split at both edges. East is to the left of South, West to the right.
+ * projection in the B2 venue. North is centered (pixel ~5440), South is
+ * split at both edges. East is to the right of North, West to the left.
  *
  * Uses the same skyline worker and rendering pipeline as ScanScreen but
  * with a fixed 360° horizontal FOV and no drag/gyro/zoom interaction.
@@ -83,22 +83,23 @@ const WRAP_H = 1080
 
 /**
  * Fixed camera for 360° panorama:
- * - heading = 180° (looking South) so that South is centered (x = W/2)
+ * - heading = 0° (looking North) so that North is centered (x = W/2)
  * - pitch = 0 (horizon at vertical center)
  * - hfov = 360 (full panorama)
  *
- * With heading=180, hfov=360:
- *   South (180°) → dBearing = 0, x = W/2. ✓ (center)
- *   West  (270°) → dBearing = 90°, x = W/2 + W/4 = 3W/4. ✓ (right of center)
- *   East  ( 90°) → dBearing = -90°, x = W/2 - W/4 = W/4. ✓ (left of center)
- *   North (  0°) → dBearing = -180°, x = W/2 - W/2 = 0 (left edge)
- *   North (360°) → dBearing = +180°, x = W/2 + W/2 = W (right edge)
+ * With heading=0, hfov=360:
+ *   North (  0°) → dBearing = 0, x = W/2. ✓ (center)
+ *   East  ( 90°) → dBearing = +90°, x = 3W/4. ✓ (right of center)
+ *   West  (270°) → dBearing = -90°, x = W/4. ✓ (left of center)
+ *   South (180°) → dBearing = ±180°, x = 0 or W. ✓ (split at both edges)
  *
- * This places North at both edges — aligning the display seam with the
- * skyline data's natural 0°/360° boundary, which eliminates horizontal
- * line artifacts from contour strands wrapping across the screen.
+ * The skyline data's natural 0°/360° wrap now sits at centre screen, so
+ * contour strands must connect across that boundary (handled by the wrap
+ * pass in buildContourStrands). The display seam at ±180° (South) is
+ * handled by the |dx| > W/2 seam-break check in the contour and silhouette
+ * renderers.
  */
-const WRAP_HEADING = 180
+const WRAP_HEADING = 0
 const WRAP_PITCH   = 0
 const WRAP_HFOV    = 360
 
@@ -985,16 +986,14 @@ const B2WrapScreen: React.FC = () => {
           units={units}
         />
 
-        {/* Cardinal direction markers */}
-        <div className={styles.cardinalMarker} style={{ left: '50%' }}>S</div>
-        <div className={styles.cardinalMarker} style={{ left: '75%' }}>W</div>
-        <div className={styles.cardinalMarker} style={{ left: '25%' }}>E</div>
-        <div className={styles.cardinalMarker} style={{ left: '0%' }}>
-          <span className={styles.cardinalSub}>N</span>
-        </div>
-        <div className={styles.cardinalMarker} style={{ left: '100%' }}>
-          <span className={styles.cardinalSub}>N</span>
-        </div>
+        {/* Cardinal direction markers.
+            Single S on the far right (opposite the AGL slider on the left).
+            Placed just inside the edge so the label isn't clipped by the
+            container. Visually ~179° on the panorama. */}
+        <div className={styles.cardinalMarker} style={{ left: '50%' }}>N</div>
+        <div className={styles.cardinalMarker} style={{ left: '75%' }}>E</div>
+        <div className={styles.cardinalMarker} style={{ left: '25%' }}>W</div>
+        <div className={styles.cardinalMarker} style={{ left: '99%' }}>S</div>
 
         {/* Loading overlay */}
         {isLoading && (
