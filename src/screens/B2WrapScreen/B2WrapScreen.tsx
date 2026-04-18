@@ -113,6 +113,10 @@ const TRK4_Z_MAX = 8
 let prevZ = 0
 const Z_Thresh = 0.2
 
+let prevX1 = 0, prevY1 = 0
+let prevX2 = 0, prevY2 = 0
+const TRK_XY_Thresh = 0.01
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Convert a layer_fraction value to scope diameter in pixels */
@@ -815,18 +819,26 @@ const B2WrapScreen: React.FC = () => {
 
       if (msg.address === '/trk_1_xy_loc') {
         // Tracker 1: args = [y_norm, x_norm, layer_fraction]
-        const xPixel = msg.args[1] * window.innerWidth
-        const yPixel = msg.args[0] * window.innerHeight
-        const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
-        setTracker1({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+        if (Math.abs(msg.args[1] - prevX1) > TRK_XY_Thresh || Math.abs(msg.args[0] - prevY1) > TRK_XY_Thresh) {
+          const xPixel = msg.args[1] * window.innerWidth
+          const yPixel = msg.args[0] * window.innerHeight
+          const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
+          setTracker1({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+          prevX1 = msg.args[1]
+          prevY1 = msg.args[0]
+        }
       }
 
       if (msg.address === '/trk_2_xy_loc') {
         // Tracker 2: same format as tracker 1
-        const xPixel = msg.args[1] * window.innerWidth
-        const yPixel = msg.args[0] * window.innerHeight
-        const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
-        setTracker2({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+        if (Math.abs(msg.args[1] - prevX2) > TRK_XY_Thresh || Math.abs(msg.args[0] - prevY2) > TRK_XY_Thresh) {
+          const xPixel = msg.args[1] * window.innerWidth
+          const yPixel = msg.args[0] * window.innerHeight
+          const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
+          setTracker2({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+          prevX2 = msg.args[1]
+          prevY2 = msg.args[0]
+        }
       }
 
       if (msg.address === '/trk_4_z_loc') {
