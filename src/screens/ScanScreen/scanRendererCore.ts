@@ -67,7 +67,7 @@ export function buildVisibilityEnvelope(
 // Handles self-occlusion on convex mountain profiles (false-summit geometry)
 // plus DEM/OSM elevation-source mismatch that dominates at close range.
 const NEAR_PEAK_TOL_DEG    = 3
-const NEAR_PEAK_TOL_MAX_M  = 3_000
+const NEAR_PEAK_TOL_MAX_M  = 5_000
 const NEAR_PEAK_TOL_RATIO  = Math.tan(NEAR_PEAK_TOL_DEG * Math.PI / 180)
 
 // ─── Constants ────────────────────────────────────────────────────────────────
