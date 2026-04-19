@@ -64,7 +64,7 @@ const HandCursor: React.FC<HandCursorProps> = ({ x, y, state, hand, visible }) =
         left: `${x}px`,
         top: `${y}px`,
         // Mirror the icon for left hand
-        transform: `translate(-50%, -50%) ${hand === 'left' ? 'scaleX(-1)' : ''}`,
+        transform: `translate(-50%, -50%) ${hand === 'right' ? 'scaleX(-1)' : ''}`,
       }}
     >
       {/* Hand icon — changes based on state */}

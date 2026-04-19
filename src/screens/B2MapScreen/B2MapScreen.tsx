@@ -158,7 +158,6 @@ const B2MapScreen: React.FC = () => {
   const setExploreLocation = useLocationStore((s) => s.setExploreLocation)
   const socketRef = useRef<Socket | null>(null)
   const screenRef = useRef<HTMLDivElement>(null)
-  const mapContainerRef = useRef<HTMLDivElement>(null)
 
   // ─── SCALE-TO-FIT ───────────────────────────────────────────────────────
   // Shrinks the 1800×1800 design to fit the current window during dev.
@@ -364,32 +363,18 @@ const B2MapScreen: React.FC = () => {
         const capturedX = state.capturedX
         const capturedY = state.capturedY
 
-        // Local design-space coords (used to position MapPulse/HoldPulse
-        // inside the scaled .mapContainer via CSS — design px are correct there)
+        // The map canvas is drawn at design-space resolution (MAP_W × MAP_H);
+        // the CSS scale transform on .screen only stretches it visually. So
+        // design-space local coords are exactly what pixelToLatLng expects.
         const localDesignX = capturedX - MAP_LEFT
         const localDesignY = capturedY - MAP_TOP
 
-        // For lat/lng we need WINDOW-pixel coords because pixelToLatLng
-        // expects pixel offsets in the same units as the canvas's drawing
-        // resolution. The map canvas renders at window-scale resolution, so
-        // we convert captured design coords → window coords using the current
-        // scale factor and the actual map rect's bounding box. This is the
-        // same math MapScreen's own handlers use.
-        const mapRect = mapContainerRef.current?.getBoundingClientRect()
-        const s = scaleFactorRef.current || 1
-        const capturedWindowX = capturedX * s
-        const capturedWindowY = capturedY * s
-        const localWindowX = mapRect ? capturedWindowX - mapRect.left : localDesignX
-        const localWindowY = mapRect ? capturedWindowY - mapRect.top : localDesignY
-        const canvasW = mapRect ? mapRect.width : MAP_W
-        const canvasH = mapRect ? mapRect.height : MAP_H
-
         const { centerLat, centerLng, zoom } = useMapViewStore.getState()
         const coords = pixelToLatLng(
-          localWindowX, localWindowY,
+          localDesignX, localDesignY,
           centerLat, centerLng,
           zoom,
-          canvasW, canvasH,
+          MAP_W, MAP_H,
         )
 
         log.info('Point: hold complete → FIRE', {
@@ -397,8 +382,6 @@ const B2MapScreen: React.FC = () => {
           lng: coords.lng.toFixed(5),
           hand: state.holdingHand,
           capturedDesign: { x: capturedX, y: capturedY },
-          capturedWindow: { x: capturedWindowX, y: capturedWindowY },
-          canvas: { w: canvasW, h: canvasH },
         })
 
         setExploreLocation(coords.lat, coords.lng)
@@ -798,7 +781,7 @@ const B2MapScreen: React.FC = () => {
       />
 
       {/* Map — grid row 2, col 2 */}
-      <div ref={mapContainerRef} className={styles.mapContainer}>
+      <div className={styles.mapContainer}>
         <MapScreen exhibitMode={true} />
 
         {/* Selection confirmation rings — expands from selected point */}
