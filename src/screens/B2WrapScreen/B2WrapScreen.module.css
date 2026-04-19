@@ -151,6 +151,20 @@
   justify-content: center;
 }
 
+.peakStatusPill {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ec-glow, #84D1DB);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: rgba(0, 8, 16, 0.6);
+  border: 1px solid var(--ec-border);
+  border-radius: 999px;
+  padding: 6px 16px;
+  white-space: nowrap;
+}
+
 .placeName {
   font-family: var(--font-display);
   font-size: 26px;

@@ -130,19 +130,19 @@
 /* Distance readout — below the scope */
 .distanceLabel {
   position: absolute;
-  bottom: -24px;
+  bottom: -40px;
   left: 50%;
   transform: translateX(-50%);
   font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 13px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--ec-glow, #84D1DB);
   text-shadow: 0 0 8px rgba(132, 209, 219, 0.6);
   letter-spacing: 0.08em;
   white-space: nowrap;
   background: rgba(0, 8, 16, 0.7);
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
 }
 
 /* Tracker label — above the scope */

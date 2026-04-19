@@ -57,9 +57,8 @@ import {
   type VisibilityEnvelope,
   DEG_TO_RAD, EARTH_R, REFRACTION_K, MAX_PEAK_DIST,
   reprojectBands, reprojectRefinedArcs, buildContourStrands,
-  project, getHorizonY,
+  getHorizonY,
   projectFirstPerson, isPeakVisible,
-  skylineAngleAt, bandAngleAt,
   renderTerrain, renderContours,
   drawSkyAndStars,
   generateStars, drawStars, type Star, type StarAngleSource,
@@ -201,6 +200,7 @@ const B2WrapScreen: React.FC = () => {
   const [skylineProgress, setSkylineProgress]       = useState(0)
   const [refinedArcs, setRefinedArcs]               = useState<RefinedArc[]>([])
   const [osmPeaks, setOsmPeaks]                     = useState<Peak[]>([])
+  const [isOsmLoading, setIsOsmLoading]             = useState(false)
   const [peakPositions, setPeakPositions]           = useState<PeakScreenPos[]>([])
   const [placeName, setPlaceName]                   = useState<string | null>(null)
 
@@ -433,8 +433,8 @@ const B2WrapScreen: React.FC = () => {
 
     // 4. Peak positions (computed for scope overlay).
     //    Two-pool selection: up to 25 nearest (<30 km) + up to 25 by elevation
-    //    angle. Pass 1 is cheap (bearing/dist/angle per peak); pass 2 runs
-    //    project + snap-to-ridgeline only for the union survivors (≤50).
+    //    angle. Pass 1 is cheap (bearing/dist/angle per peak); pass 2 projects
+    //    survivors (≤50) at their true geometric elevation angle.
     const eyeElev = groundElev + height_m
     const newPositions: PeakScreenPos[] = []
 
@@ -489,28 +489,15 @@ const B2WrapScreen: React.FC = () => {
         union.push(m)
       }
 
-      // Pass 2 — project + snap-to-ridgeline, only for survivors.
+      // Pass 2 — project survivors at their true geometric elevation angle.
       for (const { peak, bearing, horizDist, peakAngle } of union) {
         const proj = projectFirstPerson(
           peak.lat, peak.lng, peak.elevation_m,
           activeLat, activeLng, eyeElev, cam,
         )
         if (!proj) continue
-        let { screenX, screenY } = proj
+        const { screenX, screenY } = proj
         if (screenX < -50 || screenX > WRAP_W + 50) continue
-
-        const ridgeAngle = skylineAngleAt(skylineData, bearing, projectedBands)
-        if (peakAngle <= ridgeAngle + 0.002) {
-          let maxBandAngle = -Math.PI / 2
-          for (let bi = 0; bi < skylineData.bands.length; bi++) {
-            const ba = bandAngleAt(skylineData, bi, bearing, projectedBands)
-            if (ba > maxBandAngle) maxBandAngle = ba
-          }
-          if (maxBandAngle > -Math.PI / 2 + 0.001) {
-            const snapped = project(bearing, maxBandAngle, cam)
-            if (snapped.y < screenY) screenY = snapped.y
-          }
-        }
 
         newPositions.push({
           id: `${peak.lat}-${peak.lng}`,
@@ -694,11 +681,16 @@ const B2WrapScreen: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false
+    setIsOsmLoading(true)
     fetchPeaksNear(activeLat, activeLng, 130).then(fetchedPeaks => {
-      if (!cancelled && fetchedPeaks.length > 0) {
+      if (cancelled) return
+      if (fetchedPeaks.length > 0) {
         setOsmPeaks(fetchedPeaks)
         log.info('OSM peaks loaded for B2 Wrap', { count: fetchedPeaks.length })
       }
+      setIsOsmLoading(false)
+    }).catch(() => {
+      if (!cancelled) setIsOsmLoading(false)
     })
     return () => { cancelled = true }
   }, [activeLat, activeLng])
@@ -1079,6 +1071,11 @@ const B2WrapScreen: React.FC = () => {
             <span className={styles.coordLabel}>AGL</span>
             <span className={styles.coordValue}>{formatElevation(height_m, units)}</span>
           </div>
+          </div>
+          <div className={styles.peakStatusPill}>
+            {isOsmLoading
+              ? 'Loading peaks…'
+              : `Peaks: ${activePeaks.length} loaded · ${peakPositions.length} visible`}
           </div>
         </div>
       </div>

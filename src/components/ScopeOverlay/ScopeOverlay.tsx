@@ -226,9 +226,9 @@ const ScopeOverlay: React.FC<ScopeOverlayProps> = ({
       (LABEL_MAX_VISIBLE_FRACTION - LABEL_FULL_OPACITY_FRACTION),
     ))
     const peakAngle = p.peakAngle ?? 0
-    const priority =
-      0.7 * (1 - crosshairDist / radius) +
-      0.3 * (peakAngle / (Math.PI / 2))
+    // Pure center-proximity priority: the label closest to the crosshair
+    // always wins overlap contests.
+    const priority = -crosshairDist
     inScope.push({
       id: p.id,
       name: p.name,
