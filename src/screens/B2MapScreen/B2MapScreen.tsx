@@ -99,7 +99,7 @@ const MAP_H = MAP_BOTTOM - MAP_TOP      // 1500
 // FLAG: Adjust these thresholds during testing with real MediaPipe data.
 
 /** ILoveYou confidence threshold for grab (pan/pinch). */
-const GRAB_THRESHOLD = 0.8
+const GRAB_THRESHOLD = 0.5
 
 /** Pointing_Up confidence threshold for aim preview. */
 const POINT_THRESHOLD = 0.5
@@ -452,7 +452,7 @@ const B2MapScreen: React.FC = () => {
     if (lastFistPosRef.current && typeof panBy === 'function') {
       const dx = x - lastFistPosRef.current.x
       const dy = y - lastFistPosRef.current.y
-      panBy(dx, dy)
+      panBy(-dx, -dy)
     }
 
     lastFistPosRef.current = { x, y }
