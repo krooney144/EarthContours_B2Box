@@ -107,23 +107,15 @@ export async function fetchPeaksInBounds(
   const cached = await getCached(key)
   if (cached) return cached
 
-  const query = `[out:json][timeout:30];
-node["natural"="peak"]["ele"]["name"](${south},${west},${north},${east});
-out body;`
-
-  log.info('Fetching peaks from Overpass', { south, west, north, east })
-
-  try {
+  const runQuery = async (q: string): Promise<Peak[]> => {
     const resp = await fetch(OVERPASS_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
-      body: query,
+      body: q,
     })
     if (!resp.ok) throw new Error(`Overpass HTTP ${resp.status}`)
-
     const data = (await resp.json()) as OverpassResponse
-
-    const peaks: Peak[] = data.elements
+    return data.elements
       .filter(e => e.tags?.ele && e.tags?.name)
       .map(e => {
         // Overpass `ele` can be "4399", "4399 m", "14440 ft" etc.
@@ -140,17 +132,43 @@ out body;`
         } satisfies Peak
       })
       .filter(p => p.elevation_m > 0 && !isNaN(p.elevation_m))
-
-    // Sort by elevation so the most prominent peaks render on top
-    peaks.sort((a, b) => b.elevation_m - a.elevation_m)
-
-    log.info('Overpass peaks fetched', { count: peaks.length, key })
-    await saveCache(key, peaks)
-    return peaks
-  } catch (err) {
-    log.warn('Overpass fetch failed — falling back to hardcoded peaks', { err: String(err) })
-    return []
+      .sort((a, b) => b.elevation_m - a.elevation_m)
   }
+
+  const fullQuery = `[out:json][timeout:30];
+node["natural"="peak"]["ele"]["name"](${south},${west},${north},${east});
+out body;`
+
+  // Pass-2 fallback: only peaks with elevation ≥1000 m. Smaller result set is
+  // much less likely to hit a server-side timeout on overloaded Overpass nodes.
+  const tallQuery = `[out:json][timeout:30];
+node["natural"="peak"]["ele"~"^[1-9][0-9]{3,}"]["name"](${south},${west},${north},${east});
+out body;`
+
+  log.info('Fetching peaks from Overpass', { south, west, north, east })
+
+  let peaks: Peak[] = []
+  try {
+    peaks = await runQuery(fullQuery)
+    log.info('Overpass pass 1 complete', { count: peaks.length, key })
+  } catch (err) {
+    log.warn('Overpass pass 1 failed', { err: String(err) })
+  }
+
+  if (peaks.length === 0) {
+    log.warn('Pass 1 returned empty — retrying with tall-peaks-only filter')
+    try {
+      peaks = await runQuery(tallQuery)
+      log.info('Overpass pass 2 complete', { count: peaks.length, key })
+    } catch (err) {
+      log.warn('Overpass pass 2 failed', { err: String(err) })
+    }
+  }
+
+  // Only cache non-empty results so a transient Overpass failure does not
+  // poison the 24h cache for visitors who load this region next.
+  if (peaks.length > 0) await saveCache(key, peaks)
+  return peaks
 }
 
 /**

@@ -226,21 +226,34 @@ const B2WrapScreen: React.FC = () => {
   // Keep a ref to the socket so we can access it in cleanup
   const socketRef = useRef<Socket | null>(null)
 
-  // Static worldwide peak database — instant fallback when Overpass is down.
-  // Recomputed only when the viewer location changes. ~200-entry scan, sub-ms.
+  // Static worldwide peak database — surveyed elevations from authoritative
+  // sources (USGS/NGS, national agencies). 400 km box matches the skyline
+  // render range so iconic peaks are candidates anywhere in view. In-memory
+  // filter on ~150 entries, sub-millisecond.
   const databasePeaks = useMemo<Peak[]>(() => {
     const cosLat = Math.cos(activeLat * DEG_TO_RAD)
-    // 130 km box matches the peakLoader fetch radius.
-    const dLat = 130 / 111.132
-    const dLng = 130 / (111.320 * cosLat)
+    const dLat = 400 / 111.132
+    const dLng = 400 / (111.320 * cosLat)
     return getPeaksInBounds(
       activeLat + dLat, activeLat - dLat,
       activeLng + dLng, activeLng - dLng,
     )
   }, [activeLat, activeLng])
 
-  // OSM peaks win when available (richer set); database peaks are the fallback.
-  const activePeaks: Peak[] = osmPeaks.length > 0 ? osmPeaks : databasePeaks
+  // Merge database peaks (authoritative names + surveyed elevations) with
+  // OSM peaks (long tail of local peaks). Database wins on duplicates within
+  // ~555 m. Visibility filter downstream hides anything below the horizon.
+  const activePeaks = useMemo<Peak[]>(() => {
+    const merged: Peak[] = [...databasePeaks]
+    for (const osmPeak of osmPeaks) {
+      const isDup = merged.some(p =>
+        Math.abs(p.lat - osmPeak.lat) < 0.005 &&
+        Math.abs(p.lng - osmPeak.lng) < 0.005,
+      )
+      if (!isDup) merged.push(osmPeak)
+    }
+    return merged
+  }, [osmPeaks, databasePeaks])
 
   // ── Re-projection on AGL change ─────────────────────────────────────────
 
