@@ -85,6 +85,20 @@ udpPort.on("error", (err) => {
 
 udpPort.open();
 
+// ─── OSC OUT — Send /transition messages to Max/MSP ──────────────────────────
+// This block exists ONLY to send OSC OUT to a Max/MSP machine on the LAN that
+// is running [udpreceive]. The browser cannot speak UDP directly, so the
+// browser emits a Socket.IO "transition" event to this Node server, and this
+// server relays it as an OSC UDP packet to Max. Configure the Max machine's
+// LAN IP and udpreceive port via env vars when launching the server:
+//   OSC_OUT_HOST=192.168.1.42 OSC_OUT_PORT=7400 node index.cjs
+const udpOut = new osc.UDPPort({
+  remoteAddress: process.env.OSC_OUT_HOST || "192.168.10.41",
+  remotePort: parseInt(process.env.OSC_OUT_PORT || "55557", 10),
+});
+udpOut.open();
+console.log(`✓ OSC OUT → ${process.env.OSC_OUT_HOST || "192.168.10.41"}:${process.env.OSC_OUT_PORT || "55557"} (Max/MSP)`);
+
 // ─── Socket.IO — Browser Connections ─────────────────────────────────────────
 
 io.on("connection", (socket) => {
@@ -102,6 +116,16 @@ io.on("connection", (socket) => {
   socket.on("settings:update", (data) => {
     console.log("Settings update:", Object.keys(data).join(", "));
     socket.broadcast.emit("settings:update", data);
+  });
+
+  // OSC OUT: forward browser transition events to Max as /transition <0|1>.
+  // The B2 wrap screen emits "transition" with 1 when a wrap-screen change
+  // begins and 0 when the new skyline has finished loading. We pass that
+  // value through to Max so the audio system can sync with the visuals.
+  socket.on("transition", (value) => {
+    const v = value ? 1 : 0;
+    console.log(`→ OSC OUT /transition ${v}  →  ${udpOut.options.remoteAddress}:${udpOut.options.remotePort}`);
+    udpOut.send({ address: "/transition", args: [{ type: "i", value: v }] });
   });
 
   socket.on("disconnect", () => {

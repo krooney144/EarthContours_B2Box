@@ -635,6 +635,10 @@ const B2WrapScreen: React.FC = () => {
         setRefinedArcs([])
         // Signal transition overlay to start settling/fading
         setTransitionSettling(true)
+        // OSC OUT: new wrap screen has finished loading — tell Max to stop
+        // the transition cue. Server (index.cjs) relays this as /transition 0.
+        socketRef.current?.emit('transition', 0)
+        console.log('[OSC OUT] emit transition 0 (new wrap loaded)')
       } else if (type === 'refined-arcs') {
         const arcs = e.data.refinedArcs as RefinedArc[]
         log.info('Refined arcs received', { count: arcs.length })
@@ -862,6 +866,10 @@ const B2WrapScreen: React.FC = () => {
       // Start transition animation
       setTransitionSettling(false)
       setTransitionActive(true)
+      // OSC OUT: wrap-screen transition is starting — tell Max to fire its
+      // transition cue. Server (index.cjs) relays this as /transition 1.
+      socketRef.current?.emit('transition', 1)
+      console.log('[OSC OUT] emit transition 1 (wrap transition start)')
       setExploreLocation(data.lat, data.lng)
     })
 
