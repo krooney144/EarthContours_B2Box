@@ -114,7 +114,7 @@ const Z_Thresh = 0.2
 
 let prevX1 = 0, prevY1 = 0
 let prevX2 = 0, prevY2 = 0
-const TRK_XY_Thresh = 0.01
+const TRK_XY_Thresh = 0.001
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -828,14 +828,21 @@ const B2WrapScreen: React.FC = () => {
 
       if (msg.address === '/trk_1_xy_loc') {
         // Tracker 1: args = [y_norm, x_norm, layer_fraction]
-        if (Math.abs(msg.args[1] - prevX1) > TRK_XY_Thresh || Math.abs(msg.args[0] - prevY1) > TRK_XY_Thresh) {
-          const xPixel = msg.args[1] * window.innerWidth
-          const yPixel = msg.args[0] * window.innerHeight
-          const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
-          setTracker1({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
-          prevX1 = msg.args[1]
-          prevY1 = msg.args[0]
-        }
+        let easing = 0.02;
+        let diffX = (msg.args[1] * window.innerWidth) - prevX1;
+        let diffY = (msg.args[0] * window.innerHeight) - prevY1;
+        let xPixel = prevX1 + (diffX*easing) * 2
+        let yPixel = prevY1 + (diffY*easing) * 2
+        console.log("XY: ",xPixel,yPixel)
+        //if (Math.abs(msg.args[1] - prevX1) > TRK_XY_Thresh || Math.abs(msg.args[0] - prevY1) > TRK_XY_Thresh) {
+        //  const xPixel = msg.args[1] * window.innerWidth
+        //  const yPixel = msg.args[0] * window.innerHeight
+        //  console.log("HELLLOOOOOOO XY: ",xPixel,yPixel)
+        const layerFrac = msg.args[2] ?? SCOPE_LAYER_MIN
+        setTracker1({ x: xPixel, y: yPixel, visible: true, diameter: layerFractionToDiameter(layerFrac) })
+        prevX1 = msg.args[1] * window.innerWidth
+        prevY1 = msg.args[0] * window.innerHeight
+        //  }
       }
 
       if (msg.address === '/trk_2_xy_loc') {

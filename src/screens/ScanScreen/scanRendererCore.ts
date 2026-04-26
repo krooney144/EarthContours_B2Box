@@ -954,7 +954,7 @@ export function drawSkyAndStars(
   H: number,
 ): void {
   const skyGrad = ctx.createLinearGradient(0, 0, 0, H)
-  skyGrad.addColorStop(0,    '#000000')
+  skyGrad.addColorStop(0,    '#000000') 
   skyGrad.addColorStop(0.50, '#000000')
   skyGrad.addColorStop(0.65, '#030a14')
   skyGrad.addColorStop(0.82, '#071a2a')
