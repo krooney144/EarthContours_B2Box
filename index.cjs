@@ -93,6 +93,8 @@ udpPort.open();
 // LAN IP and udpreceive port via env vars when launching the server:
 //   OSC_OUT_HOST=192.168.1.42 OSC_OUT_PORT=7400 node index.cjs
 const udpOut = new osc.UDPPort({
+  localAddress: "0.0.0.0",
+  localPort: 0,                  // ephemeral — we only send, never receive
   remoteAddress: process.env.OSC_OUT_HOST || "192.168.10.41",
   remotePort: parseInt(process.env.OSC_OUT_PORT || "55557", 10),
 });
